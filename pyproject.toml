@@ -1,0 +1,119 @@
+[project]
+name = "ccslack"
+version = "0.0.1"
+description = "CCSlack — manage AI coding agents from Slack via tmux"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14"
+authors = [
+    { name = "ccslack contributors" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications :: Chat",
+    "Topic :: Software Development",
+    "Typing :: Typed",
+]
+dependencies = [
+    "slack-bolt>=1.21.0",
+    "slack-sdk>=3.34.0",
+    "aiohttp>=3.10",
+    "python-dotenv>=1.0.0",
+    "httpx>=0.27.0",
+    "libtmux>=0.50.0",
+    "Pillow>=10.0.0",
+    "aiofiles>=24.0.0",
+    "structlog>=24.0.0",
+    "click>=8.1.0",
+    "pyte>=0.8.2",
+    "pathspec>=0.12",
+]
+
+[project.scripts]
+ccslack = "ccslack.main:main"
+
+[project.optional-dependencies]
+tts = [
+    "edge-tts>=7.2.8",
+]
+dev = [
+    "deptry>=0.23.0",
+    "pyright>=1.1.0",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0",
+    "pytest-timeout>=2.3",
+    "ruff>=0.8.0",
+    "hypothesis>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ccslack"]
+
+[tool.ruff]
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "ARG", "G", "BLE", "SIM", "PLR2004", "C901", "PLR0911", "PLR0912", "PLR0915", "N"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-returns = 8
+max-branches = 15
+max-statements = 60
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ARG", "PLR2004"]
+"src/ccslack/screenshot.py" = ["PLR2004", "C901", "PLR0912"]
+"src/ccslack/transcript_parser.py" = ["C901", "PLR0912", "PLR0915", "PLR0911"]
+"src/ccslack/session.py" = ["C901", "PLR0912", "PLR0915"]
+"src/ccslack/session_monitor.py" = ["C901", "PLR0912"]
+"src/ccslack/transcript_reader.py" = ["C901", "PLR0912"]
+# slack_sdk method names use camelCase verbatim — propagate the naming.
+"src/ccslack/slack_client.py" = ["N802"]
+# hook.py mirrors ccgram's hook CLI; complexity inherited from the source.
+"src/ccslack/hook.py" = ["C901", "PLR0912", "PLR0915"]
+# Meta-channel slash command dispatcher has branchy validation paths;
+# _handle_new in particular grew with the worktree opt-in flag.
+"src/ccslack/handlers/meta.py" = ["C901", "PLR0911", "PLR0912", "PLR0915"]
+# WindowState.to_dict has many opt-in fields; branches grow linearly with them.
+"src/ccslack/window_state_store.py" = ["PLR0912"]
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["deptry", "pyright", "pytest", "pytest-asyncio", "pytest-cov", "pytest-timeout", "ruff", "hypothesis"]
+DEP003 = ["edge-tts"]
+
+[tool.pyright]
+pythonVersion = "3.14"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+timeout = 30
+markers = [
+    "integration: tests using real filesystem or external processes",
+    "e2e: end-to-end tests with real agent CLIs (local only, slow)",
+    "llm: tests requiring real LLM API keys (slow, requires env vars)",
+]
+
+[tool.coverage.run]
+source = ["ccslack"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "logger\\.",
+]

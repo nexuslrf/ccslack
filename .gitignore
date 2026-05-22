@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.egg
+
+# Build & Distribution
+build/
+dist/
+sdist/
+wheels/
+
+# Virtual Environments
+.venv/
+.env
+
+# Testing & Coverage
+.hypothesis/
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+coverage.json
+
+# Type Checking & Linting
+.mypy_cache/
+.ruff_cache/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude Code (keep .claude/ tracked)
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# Runtime uploads
+.ccslack-uploads/
+
+# Dev run lock
+.ccslack-dev-run.lock.d/
