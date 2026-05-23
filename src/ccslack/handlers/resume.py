@@ -210,7 +210,9 @@ def register(app: AsyncApp) -> None:
         await ack()
         user_id = body.get("user", {}).get("id", "")
         channel_id = body.get("channel", {}).get("id", "")
-        if not config.is_user_allowed(user_id) or not channel_id:
+        from .auth import is_authorized
+
+        if not is_authorized(user_id, channel_id) or not channel_id:
             return
 
         action_id = ""

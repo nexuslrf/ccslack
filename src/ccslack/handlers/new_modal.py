@@ -130,7 +130,12 @@ def register(app: AsyncApp) -> None:
         await ack()
         user_id = body.get("user", {}).get("id", "")
         meta_channel = view.get("private_metadata", "")
-        if not config.is_user_allowed(user_id):
+        # new-session creation is a meta-level action — always require the
+        # global allow-list. Bound-channel membership doesn't grant the
+        # right to spawn new sessions.
+        from .auth import is_meta_authorized
+
+        if not is_meta_authorized(user_id):
             return
 
         state_values = view.get("state", {}).get("values", {})

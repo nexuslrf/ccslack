@@ -31,7 +31,6 @@ from typing import TYPE_CHECKING, Any
 
 from slack_sdk.errors import SlackApiError
 
-from ..config import config
 from ..session import session_manager
 from ..thread_router import thread_router
 from ..tmux_manager import tmux_manager
@@ -205,7 +204,10 @@ def register(app: AsyncApp) -> None:
         await ack()
         user_id = body.get("user", {}).get("id", "")
         channel_id = body.get("channel", {}).get("id", "")
-        if not config.is_user_allowed(user_id) or not channel_id:
+        # Lazy: auth helper at call site.
+        from .auth import is_authorized
+
+        if not is_authorized(user_id, channel_id) or not channel_id:
             return
         window_id = _extract_window_id(body, "ccslack_toolbar_open")
         if not window_id:
@@ -217,7 +219,9 @@ def register(app: AsyncApp) -> None:
         await ack()
         user_id = body.get("user", {}).get("id", "")
         channel_id = body.get("channel", {}).get("id", "")
-        if not config.is_user_allowed(user_id) or not channel_id:
+        from .auth import is_authorized
+
+        if not is_authorized(user_id, channel_id) or not channel_id:
             return
         ts = (body.get("message") or {}).get("ts")
         if not ts:
@@ -239,7 +243,10 @@ def register(app: AsyncApp) -> None:
 async def _dispatch_key(body: dict[str, Any]) -> None:
     """Resolve action_id → tmux key → send_keys to the bound window."""
     user_id = body.get("user", {}).get("id", "")
-    if not config.is_user_allowed(user_id):
+    channel_id = body.get("channel", {}).get("id", "")
+    from .auth import is_authorized
+
+    if not is_authorized(user_id, channel_id):
         return
 
     action_id = ""

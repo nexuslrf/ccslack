@@ -179,7 +179,9 @@ def register(app: AsyncApp) -> None:
         user_id = body.get("user", {}).get("id", "")
         channel_id = body.get("channel", {}).get("id", "")
         window_id = _extract_window_id(body, "ccslack_recover_archive")
-        if not config.is_user_allowed(user_id) or not channel_id or not window_id:
+        from .auth import is_authorized
+
+        if not is_authorized(user_id, channel_id) or not channel_id or not window_id:
             return
         await _archive(client, channel_id, window_id, body=body)
 
@@ -199,8 +201,9 @@ async def _handle_recover(
     window_id = _extract_window_id(
         body, body.get("actions", [{}])[0].get("action_id", "")
     )
+    from .auth import is_authorized
 
-    if not config.is_user_allowed(user_id) or not channel_id or not window_id:
+    if not is_authorized(user_id, channel_id) or not channel_id or not window_id:
         return
 
     success, message, new_window_id = await _respawn_window(

@@ -57,9 +57,12 @@ def _register_health_handlers(app: AsyncApp) -> None:
     @app.event("app_mention")
     async def on_app_mention(event: dict, say) -> None:  # noqa: ANN001
         """Respond to @ccslack in the meta channel with a status ping."""
+        # Lazy: keep the import here so the registry stays a thin top-level wire.
+        from .auth import is_authorized
+
         channel = event.get("channel", "")
         user = event.get("user", "")
-        if not config.is_user_allowed(user):
+        if not is_authorized(user, channel):
             logger.info("Ignoring app_mention from unauthorized user %s", user)
             return
         if channel != config.meta_channel_id:

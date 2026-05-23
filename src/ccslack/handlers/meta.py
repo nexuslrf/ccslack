@@ -82,7 +82,12 @@ def register(app: AsyncApp) -> None:
         channel_id = body.get("channel_id", "")
         raw_text = (body.get("text") or "").strip()
 
-        if not config.is_user_allowed(user_id):
+        # Auth: bound session-channel members are trusted by virtue of
+        # membership (the bot itself invited everyone there). Anywhere else
+        # — meta channel, unrelated channels, DMs — requires ALLOWED_USERS.
+        from .auth import is_authorized
+
+        if not is_authorized(user_id, channel_id):
             await _post_ephemeral(
                 client.chat_postEphemeral,
                 channel=channel_id,
@@ -885,7 +890,12 @@ def register_dashboard_actions(app) -> None:  # noqa: ANN001
     async def on_dashboard_kill(ack, body, client) -> None:  # noqa: ANN001
         await ack()
         user_id = body.get("user", {}).get("id", "")
-        if not config.is_user_allowed(user_id):
+        # Dashboard is posted in the meta channel; killing other people's
+        # sessions is a meta-level action and stays restricted to the
+        # global allow-list.
+        from .auth import is_meta_authorized
+
+        if not is_meta_authorized(user_id):
             return
         target = ""
         for action in body.get("actions", []) or []:

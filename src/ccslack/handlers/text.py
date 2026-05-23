@@ -20,11 +20,11 @@ from typing import TYPE_CHECKING
 
 from slack_sdk.errors import SlackApiError
 
-from ..config import config
 from ..slack_client import BoltSlackClient
 from ..thread_router import thread_router
 from ..tmux_manager import tmux_manager
 from . import shell_capture
+from .auth import is_authorized
 
 if TYPE_CHECKING:
     from slack_bolt.async_app import AsyncApp
@@ -53,7 +53,7 @@ def register(app: AsyncApp) -> None:
         if window_id is None:
             return
 
-        if not config.is_user_allowed(user_id):
+        if not is_authorized(user_id, channel_id):
             await _react(client, channel_id, event.get("ts", ""), "no_entry_sign")
             return
 

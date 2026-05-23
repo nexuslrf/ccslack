@@ -275,7 +275,10 @@ def register(app) -> None:  # noqa: ANN001
         await ack()
         user_id = body.get("user", {}).get("id", "")
         channel_id = body.get("channel", {}).get("id", "")
-        if not config.is_user_allowed(user_id):
+        # Lazy: auth helper imported at call site.
+        from .auth import is_authorized
+
+        if not is_authorized(user_id, channel_id):
             return
         window_id = ""
         for action in body.get("actions", []) or []:

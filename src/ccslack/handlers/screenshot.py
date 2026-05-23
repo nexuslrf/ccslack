@@ -21,7 +21,6 @@ from typing import TYPE_CHECKING
 
 from slack_sdk.errors import SlackApiError
 
-from ..config import config
 from ..screenshot import text_to_image
 from ..slack_client import BoltSlackClient
 from ..thread_router import thread_router
@@ -104,7 +103,10 @@ def register(app: AsyncApp) -> None:
         await ack()
         user_id = body.get("user", {}).get("id", "")
         channel_id = body.get("channel", {}).get("id", "")
-        if not config.is_user_allowed(user_id):
+        # Lazy: keep auth wire local to the handler call site.
+        from .auth import is_authorized
+
+        if not is_authorized(user_id, channel_id):
             return
         window_id = ""
         for action in body.get("actions", []) or []:
