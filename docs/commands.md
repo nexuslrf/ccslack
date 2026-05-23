@@ -1,0 +1,276 @@
+# Commands
+
+Every slash subcommand and Block Kit action ccslack ships. The slash command
+itself defaults to `/ccslack`; you can rename it via `CCSLACK_SLASH_COMMAND`
+(see [`configuration.md`](configuration.md)).
+
+---
+
+## Slash commands
+
+### `/ccslack help`
+
+Shows the full list of subcommands as an ephemeral message. Works in any
+channel.
+
+### `/ccslack new`
+
+Create a new session.
+
+| Form | Behaviour |
+|---|---|
+| `/ccslack new` | Opens a Block Kit modal — directory text input, provider radio, "create fresh git worktree" checkbox + optional branch name |
+| `/ccslack new <dir>` | Default provider in `<dir>` |
+| `/ccslack new <dir> <provider>` | `provider` ∈ `claude` `codex` `gemini` `pi` `shell` |
+| `/ccslack new <dir> claude --worktree` | Spawns a fresh `git worktree` (auto-named `ccg/<slug>`) and uses *that* path as the session cwd |
+| `/ccslack new <dir> claude --worktree feature-x` | Same but with a named branch |
+
+**Where it works**: meta channel only.
+**Auth**: `ALLOWED_USERS`.
+
+What happens on success:
+
+1. ccslack runs `tmux new-window` in `<dir>` (or the worktree path),
+   launching the agent CLI.
+2. A private Slack channel `#ccslack-<slug>` is created.
+3. You're invited.
+4. The channel topic + purpose carry the cwd and tmux window ID.
+5. A status message is posted and pinned.
+6. Welcome message + ephemeral confirmation in the meta channel.
+
+### `/ccslack list`
+
+Quick one-line-per-session text dump of every bound channel.
+
+- **Where**: meta channel only.
+- **Auth**: `ALLOWED_USERS`.
+
+### `/ccslack sessions`
+
+Interactive Block Kit dashboard. Each row: state emoji, channel mention,
+provider, tmux window ID, display name, cwd, **🗑️ Kill button** with
+confirm modal.
+
+- **Where**: meta channel only.
+- **Auth**: `ALLOWED_USERS`.
+- **Kill button auth**: `ALLOWED_USERS` (meta-only action — channel
+  members can't kill *other* people's sessions from here).
+
+### `/ccslack history [N]`
+
+Posts the last `N` (default 20, max 100) transcript messages as
+ephemeral Block Kit context blocks. Useful for catching up on a session
+without scrolling Slack.
+
+Per-line emoji:
+
+- 👤 `user`
+- 🤖 `assistant`
+- 💭 `thinking`
+- 🔧 `tool_use`
+- 🧾 `tool_result`
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
+### `/ccslack resume`
+
+Scans `~/.claude/projects/*` for past Claude sessions whose cwd matches
+the bound channel's cwd. Shows up to 6 as ephemeral buttons; clicking
+one spawns a fresh tmux window running `claude --resume <id>` and
+rebinds the channel.
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+- **Limitation**: Claude only. Codex/Gemini/Pi have their own resume
+  flows; tell us if you want them ported.
+
+### `/ccslack panes`
+
+Ephemeral list of every tmux pane in the bound window: active marker,
+command, current path, dimensions. Useful when the agent is running a
+multi-pane team.
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
+### `/ccslack send <path>`
+
+Upload a file from the session's cwd to the channel. Resolves relative
+paths against the cwd; absolute paths must still be inside cwd.
+
+Security filters (all enforced, deny-by-default):
+- Path containment (resolved path must stay inside cwd; blocks `../`
+  and symlink escapes)
+- Hidden files / directories (`.`-prefixed) denied
+- Secret-name patterns (`*.pem`, `*.key`, `*.env`, `*credential*`,
+  `*secret*`, …)
+- `.gitignore` and `.gitleaks.toml` rules
+- 50 MB Slack file cap
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
+### `/ccslack mute [all|errors|off]`
+
+Per-channel notification mode.
+
+| Mode | Effect |
+|---|---|
+| `all` (default) | Every transcript message posts |
+| `errors` (alias `errors_only`) | Only error-like content + tool flows post |
+| `off` (alias `muted`) | Plain text suppressed; tool flows still post so the agent can progress |
+
+No arg cycles through the three modes.
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
+### `/ccslack toolcalls [shown|hidden|default]`
+
+Per-channel tool-use / tool-result visibility.
+
+| Mode | Effect |
+|---|---|
+| `shown` | Always show the tool chain in this channel |
+| `hidden` | Always hide tool calls |
+| `default` | Defer to the global `CCSLACK_HIDE_TOOL_CALLS` env var |
+
+No arg cycles. Default global is `shown` (matches ccgram).
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
+### `/ccslack kill [target | --all --confirm]`
+
+Tear down sessions.
+
+| Form | Behaviour |
+|---|---|
+| `/ccslack kill` (from a session channel) | Kills *this* channel's session |
+| `/ccslack kill <#channel>` (from meta) | Kills the session bound to the mentioned channel |
+| `/ccslack kill C0123ABC` (from meta) | Same but by raw channel ID |
+| `/ccslack kill @14` (from meta) | Same but by tmux window ID |
+| `/ccslack kill --all` (from meta) | Dry-run — reports how many sessions would be killed |
+| `/ccslack kill --all --confirm` (from meta) | Actually kills everything |
+
+Each kill does (in order):
+
+1. Remove the pinned status message
+2. `tmux kill-window`
+3. Unbind the channel from the router
+4. Drop the `WindowState`
+5. Forget polling bookkeeping
+6. `conversations.archive` the Slack channel
+
+- **Where**: session channel (no-arg form) OR meta channel (any form).
+- **Auth**: session-channel form requires channel membership; targeted +
+  `--all` forms require `ALLOWED_USERS`.
+
+---
+
+## Block Kit actions
+
+### Status-message buttons (pinned in each session channel)
+
+| Button | Action |
+|---|---|
+| 📷 **Screenshot** | Captures the visible viewport of the tmux pane, renders to PNG, uploads via `files.upload_v2`. Bounded size — focuses on most recent operations. |
+| 🎛️ **Toolbar** | Posts a separate Block Kit toolbar message with per-provider key buttons (see below). |
+| 🗑️ **Archive** | Confirm modal → kills the tmux window, unbinds the channel, archives the Slack channel. |
+
+### Toolbar (posted by 🎛️)
+
+Provider-specific layouts:
+
+| Provider | Layout |
+|---|---|
+| **Claude** | Esc · Shift-Tab (Mode) · Tab (Think) · Ctrl-C ··· ↑ ↓ Enter Bksp ··· 1 2 3 4 5 |
+| **Codex** | Esc · Tab · Shift-Tab (Model) · Ctrl-C ··· ↑ ↓ Enter Bksp ··· 1 2 3 4 5 |
+| **Gemini** | same as Codex |
+| **Pi** | same as Claude |
+| **Shell** | Enter · Ctrl-C · Ctrl-D · Ctrl-Z ··· ↑ ↓ Tab Esc |
+
+Every button has `action_id="ccslack_key:<tmux-key>"` and routes to
+`tmux_manager.send_keys(window_id, key, literal=False, enter=False)`.
+A separate ✖ **Close** button deletes the toolbar message.
+
+### Live picker (posted on interactive prompts)
+
+Triggered automatically when a `tool_use` of `AskUserQuestion` /
+`ExitPlanMode` / `request_user_input` appears in the JSONL transcript,
+**or** when the fallback regex prober detects a TUI selector in the
+pane (Codex `›`-arrow + numbered list, inline `[y/N]`).
+
+Buttons:
+- ↑ ↓ ← → (arrows)
+- ⏎ Enter (primary)  ⎋ Esc  ⇥ Tab  ␣ Space  ⌫ Bksp
+- 1 2 3 4 5 (picker digits)
+- 🗑️ Dismiss (closes the picker locally without sending keys)
+
+The picker re-edits itself every 0.8 s as the pane changes. It auto-
+closes when:
+- the matching `tool_result` arrives
+- the agent's Stop hook fires
+- the tmux window dies
+- no pane change for 60 s
+- the user clicks Dismiss
+
+On close, the picker message is **deleted** (matches ccgram — no
+terminal-state stub).
+
+### Recovery banner (posted when a window dies)
+
+Appears in the channel within ~1 s of polling detecting a dead window.
+
+| Button | Behaviour |
+|---|---|
+| ✨ **Fresh** | New tmux window, same provider + cwd, fresh agent session |
+| 🔄 **Continue** | Same as Fresh + `--continue` flag (provider-dependent) |
+| ⏪ **Resume** | Same as Fresh + `--resume <last_session_id>` (Claude only) |
+| 🗑️ **Archive** | Kill + archive |
+
+Fresh / Continue / Resume rebind the channel and re-post the status
+message; Archive removes everything.
+
+---
+
+## CLI commands (run from your terminal)
+
+| Command | What it does |
+|---|---|
+| `ccslack` (or `ccslack run`) | Start the bot |
+| `ccslack hook --install [--provider X]` | Install agent hooks |
+| `ccslack hook --uninstall [--provider X]` | Remove ccslack's hook entries |
+| `ccslack hook --status [--provider X]` | Inspect installed hooks |
+| `ccslack status` | Show local ccslack state (config dir, paths, tmux session name) |
+| `ccslack doctor [--fix]` | Validate setup (stub today) |
+| `ccslack --help` | CLI help |
+| `ccslack --version` | Version string |
+
+The `ccslack hook` command without a flag is also the entry point Slack /
+Codex spawn as a subprocess to write hook events; you typically don't
+invoke that form by hand.
+
+---
+
+## Permission summary
+
+| Action | Permission |
+|---|---|
+| `/ccslack new` (modal or CLI form) | `ALLOWED_USERS` |
+| `/ccslack list`, `/ccslack sessions` | `ALLOWED_USERS` |
+| Dashboard 🗑️ Kill button | `ALLOWED_USERS` |
+| `/ccslack kill --all`, kill by `<#channel>` / `C…` / `@N` | `ALLOWED_USERS` |
+| `/ccslack kill` (from session channel) | Channel membership |
+| `/ccslack mute`, `history`, `resume`, `panes`, `send`, `toolcalls` | Channel membership |
+| Inbound message → tmux | Channel membership |
+| Status-message buttons (Screenshot, Toolbar, Archive) | Channel membership |
+| Live picker buttons | Channel membership |
+| Recovery banner buttons | Channel membership |
+| Toolbar key buttons | Channel membership |
+| `@ccslack` mention | `ALLOWED_USERS` (in meta) OR channel membership (in session channel) |
+
+The principle: meta channel + cross-cutting actions ("create a session",
+"kill someone else's", "kill everything") require the global allow-list;
+in-channel actions defer to who Slack let into the channel.
