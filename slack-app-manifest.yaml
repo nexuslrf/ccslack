@@ -1,0 +1,103 @@
+# ccslack — Slack app manifest
+#
+# Quick path: copy this into Slack's app-manifest editor and you get the
+# right bot scopes, slash command, event subscriptions, and Socket Mode
+# turned on in one shot.
+#
+# How to apply
+# ============
+# 1. Go to https://api.slack.com/apps → "Create New App" → "From a manifest".
+# 2. Pick your workspace.
+# 3. Paste this file's contents into the YAML editor and continue.
+# 4. After the app is created, open it and:
+#       Settings → Basic Information → App-Level Tokens →
+#       "Generate Token and Scopes" → add the `connections:write` scope
+#       and save. Copy that `xapp-…` token; it is your `SLACK_APP_TOKEN`.
+# 5. Settings → Install App → "Install to Workspace". Copy the
+#    `xoxb-…` Bot User OAuth Token; it is your `SLACK_BOT_TOKEN`.
+# 6. In Slack, create a private channel (e.g. #ccslack), invite the bot,
+#    copy the channel ID into `SLACK_META_CHANNEL_ID`.
+# 7. Find your Slack user ID (profile → ⋯ → Copy member ID) and put it
+#    in `ALLOWED_USERS`.
+# 8. Run the bot:  `uv run ccslack`
+#
+# Note on the slash command name
+# ==============================
+# This manifest registers `/ccslack`. If you want a different name (to
+# avoid collisions with another app), edit `slash_commands[0].command`
+# below AND set `CCSLACK_SLASH_COMMAND=/your-name` in your `.env` so the
+# bot listens on the same name.
+
+display_information:
+  name: ccslack
+  description: Drive AI coding agents (Claude Code, Codex, Gemini, Pi, shell) from Slack via tmux.
+  background_color: "#1f2937"
+
+features:
+  bot_user:
+    display_name: ccslack
+    always_online: true
+  slash_commands:
+    - command: /ccslack
+      description: Manage ccslack sessions
+      usage_hint: "new <dir> [provider] | list | sessions | history | resume | panes | send | mute | toolcalls | kill | help"
+      should_escape: false
+
+oauth_config:
+  scopes:
+    bot:
+      # Listen for @ccslack in any channel the bot is in.
+      - app_mentions:read
+
+      # Post messages, edit messages, send ephemerals.
+      - chat:write
+
+      # Receive the `/ccslack` slash command.
+      - commands
+
+      # Create + archive session channels (used when configured public,
+      # also required by some workspaces even for groups:write paths).
+      - channels:manage
+
+      # Read messages in private session channels.
+      - groups:read
+
+      # Create + archive private session channels.
+      - groups:write
+
+      # Invite the requesting user to the new session channel.
+      - groups:write.invites
+
+      # Pin the per-channel status message (chat.update target).
+      - pins:write
+      - pins:read
+
+      # Upload screenshots (PNGs) + /ccslack send files.
+      - files:write
+      - files:read
+
+      # ✓ / 🚫 / ⚠️ reactions on inbound prompts. Required for the visual
+      # ack pattern the text handler uses.
+      - reactions:write
+
+settings:
+  event_subscriptions:
+    bot_events:
+      # @ccslack health-check ping.
+      - app_mention
+
+      # All inbound text in private session channels routes through here.
+      - message.groups
+
+  interactivity:
+    # Required for Block Kit buttons (status bar, toolbar, picker,
+    # recovery banner, dashboard). No `request_url` because we use
+    # Socket Mode.
+    is_enabled: true
+
+  # ccslack uses Socket Mode so no public HTTPS endpoint is needed.
+  socket_mode_enabled: true
+
+  # Token rotation isn't needed for personal-use bots; flip to true if
+  # you want Slack to rotate the bot token periodically.
+  token_rotation_enabled: false

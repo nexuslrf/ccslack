@@ -48,7 +48,9 @@ cd ccslack
 uv sync
 
 # 2. Create a Slack app + private meta channel + .env
-#    (see docs/setup.md for the walkthrough)
+#    (see docs/setup.md for the walkthrough — or paste
+#    slack-app-manifest.yaml into Slack's "From a manifest" flow
+#    to get every scope + the slash command + Socket Mode in one shot)
 cp .env.example ~/.ccslack/.env
 $EDITOR ~/.ccslack/.env   # fill in SLACK_BOT_TOKEN, SLACK_APP_TOKEN,
                           #         SLACK_META_CHANNEL_ID, ALLOWED_USERS
@@ -78,6 +80,7 @@ agent's reply streams back.
 ## Documentation
 
 - 📦 [`docs/setup.md`](docs/setup.md) — Slack app + OAuth + tokens + first run
+- 📋 [`slack-app-manifest.yaml`](slack-app-manifest.yaml) — copy-paste ready manifest for Slack's "From a manifest" flow
 - 🎮 [`docs/commands.md`](docs/commands.md) — every slash command + Block Kit action
 - 🔧 [`docs/configuration.md`](docs/configuration.md) — env vars, state files, per-channel settings
 - 🏗️ [`docs/architecture.md`](docs/architecture.md) — module map + design decisions

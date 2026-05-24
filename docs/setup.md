@@ -104,50 +104,36 @@ everything at once.
 prompt. Copy the **Bot User OAuth Token** (starts `xoxb-…`); you'll need
 it as `SLACK_BOT_TOKEN`.
 
-### 3f. App Manifest (optional one-shot)
+### 3f. App Manifest (one-shot, recommended)
 
-If you'd rather paste a manifest, here's the equivalent YAML:
+There's a ready-to-paste manifest at the repo root:
+[`slack-app-manifest.yaml`](../slack-app-manifest.yaml).
 
-```yaml
-display_information:
-  name: ccslack
-  description: Drive AI coding agents from Slack
-features:
-  bot_user:
-    display_name: ccslack
-    always_online: true
-  slash_commands:
-    - command: /ccslack
-      description: Manage ccslack sessions
-      usage_hint: new <dir> [provider]
-      should_escape: false
-oauth_config:
-  scopes:
-    bot:
-      - app_mentions:read
-      - chat:write
-      - commands
-      - channels:manage
-      - groups:read
-      - groups:write
-      - groups:write.invites
-      - pins:write
-      - pins:read
-      - files:write
-      - files:read
-      - reactions:write
-settings:
-  event_subscriptions:
-    bot_events:
-      - app_mention
-      - message.groups
-  interactivity:
-    is_enabled: true
-  socket_mode_enabled: true
-```
+Two ways to use it:
 
-Paste into **Features → App Manifest → YAML**, save, **reinstall** the
-app to apply the new scopes.
+**A) Brand-new app** (skips 3a–3e entirely):
+1. <https://api.slack.com/apps> → **Create New App** → **From a manifest**.
+2. Pick your workspace.
+3. Paste the file's YAML, continue.
+4. After creation: **Basic Information → App-Level Tokens → Generate
+   Token and Scopes** → add `connections:write` → save → copy the
+   `xapp-…` token (this is `SLACK_APP_TOKEN`).
+5. **Install App → Install to Workspace** → copy the `xoxb-…` token
+   (this is `SLACK_BOT_TOKEN`).
+
+**B) Existing app** (sync scopes + slash command + event subscriptions):
+1. Open your app in <https://api.slack.com/apps>.
+2. **Features → App Manifest → YAML** → paste, save.
+3. **Reinstall** the app (Slack prompts for it) to apply the new scopes.
+
+Either way, the manifest sets:
+- All 12 OAuth bot scopes ccslack needs
+- The `/ccslack` slash command
+- `app_mention` + `message.groups` event subscriptions
+- Interactivity (needed for Block Kit buttons)
+- Socket Mode enabled
+
+Skip ahead to [§4](#4-create-the-meta-channel).
 
 ---
 
