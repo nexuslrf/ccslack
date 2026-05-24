@@ -59,8 +59,13 @@ oauth_config:
       # also required by some workspaces even for groups:write paths).
       - channels:manage
 
-      # Read messages in private session channels.
+      # Basic info about private channels (list, lookup).
       - groups:read
+
+      # Read message history in private session channels — REQUIRED for the
+      # ``message.groups`` event to actually deliver message bodies to the
+      # bot (groups:read alone won't unlock it).
+      - groups:history
 
       # Create + archive private session channels.
       - groups:write

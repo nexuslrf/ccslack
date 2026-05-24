@@ -67,7 +67,8 @@ everything at once.
 | `chat:write` | Post messages, edit them via `chat.update`, send ephemerals |
 | `commands` | Receive the `/ccslack` slash command |
 | `channels:manage` | Create + archive session channels (when configured public) |
-| `groups:read` | Read messages in private session channels |
+| `groups:read` | Basic info about private channels (list, lookup) |
+| `groups:history` | **Required** for `message.groups` events to deliver bodies — without this Slack rejects the event subscription |
 | `groups:write` | Create + archive private session channels |
 | `groups:write.invites` | Invite the requesting user to the new session channel |
 | `pins:write` | Pin the status message in each session channel |

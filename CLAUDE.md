@@ -116,6 +116,10 @@ Precedence: CLI flag > env > `.env` (CWD > `$CCSLACK_DIR`) > default.
 Required env: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`,
 `SLACK_META_CHANNEL_ID`, `ALLOWED_USERS`.
 
+Required Slack bot scopes (12+1): the 12 in the original manifest plus
+`groups:history` (Slack rejects the `message.groups` event subscription
+without it — `groups:read` only covers channel listing).
+
 Full reference: `docs/configuration.md`.
 
 State files in `$CCSLACK_DIR` (default `~/.ccslack`):
