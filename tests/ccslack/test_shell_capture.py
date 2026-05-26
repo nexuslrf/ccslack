@@ -1,7 +1,9 @@
 from ccslack.handlers.shell_capture import (
+    WAIT_FOR_PROMPT_SECONDS,
     _diff_new_lines,
     _format_body,
     _looks_like_prompt,
+    _prompt_returned,
     _strip_echoed_command,
     _strip_trailing_prompt,
 )
@@ -143,6 +145,52 @@ def test_format_body_command_no_output():
 
 def test_format_body_no_command_no_output_is_empty():
     assert _format_body("", "") == ""
+
+
+def test_format_body_still_running_annotation():
+    body = _format_body("du -sh /huge", "1.2T  /huge/a\n", still_running=True)
+    assert "(still running" in body
+    assert "1.2T" in body
+
+
+def test_prompt_returned_positive_after_command():
+    before = "(base) user@host:/path$ "
+    after = (
+        "(base) user@host:/path$ du -sh *\n"
+        "1.3T cache\n"
+        "424G datasets\n"
+        "(base) user@host:/path$"
+    )
+    assert _prompt_returned(before, after) is True
+
+
+def test_prompt_returned_negative_while_running():
+    before = "(base) user@host:/path$ "
+    after = (
+        "(base) user@host:/path$ du -sh *\n"
+        "1.3T cache\n"
+        "424G datasets"
+        # No new prompt yet — command still in progress.
+    )
+    assert _prompt_returned(before, after) is False
+
+
+def test_prompt_returned_empty_inputs():
+    assert _prompt_returned("", "anything") is False
+    assert _prompt_returned("prompt$", "") is False
+    assert _prompt_returned("", "") is False
+
+
+def test_prompt_returned_ignores_blank_lines():
+    before = "ignored\n\n(base) user@host:/path$ "
+    after = "(base) user@host:/path$ ls\nfile\n\n(base) user@host:/path$"
+    assert _prompt_returned(before, after) is True
+
+
+def test_wait_for_prompt_seconds_is_bounded():
+    # Sanity check: the constant exists and is finite (would-be infinite-loop
+    # guard for the polling implementation).
+    assert 1.0 <= WAIT_FOR_PROMPT_SECONDS <= 300.0
 
 
 def test_end_to_end_strip_pipeline():

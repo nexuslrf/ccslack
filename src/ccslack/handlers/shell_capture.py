@@ -37,9 +37,21 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-# How long to wait before re-capturing. Tuned for sub-second commands; longer
-# commands need a future port of ccgram's prompt-marker pipeline.
-CAPTURE_DELAY_SECONDS = 0.9
+# Initial pause before the first capture so very fast commands (``pwd``,
+# ``echo hi``) get a chance to finish before we start polling.
+INITIAL_DELAY_SECONDS = 0.3
+
+# How often to re-capture while waiting for the prompt to come back.
+POLL_INTERVAL_SECONDS = 0.5
+
+# Maximum wall-clock wait before we give up and post whatever's there with a
+# "still running" note. Covers slow commands like ``du -sh /large/tree`` or
+# ``find /`` without hanging the bot forever on tail-like commands.
+WAIT_FOR_PROMPT_SECONDS = 30.0
+
+# Legacy alias — kept so existing tests / docs that reference this constant
+# don't break.
+CAPTURE_DELAY_SECONDS = INITIAL_DELAY_SECONDS
 
 # How many lines of scrollback to capture before/after the keypress. Large
 # enough that the pre-send content remains findable as a substring inside the
@@ -106,22 +118,51 @@ async def _capture_and_post(
     channel_id: str,
     window_id: str,
 ) -> None:
-    """Wait briefly, capture pane, diff against snapshot, post the new lines."""
-    await asyncio.sleep(CAPTURE_DELAY_SECONDS)
-    after = await tmux_manager.capture_pane_scrollback(
-        window_id, history=CAPTURE_HISTORY_LINES
-    )
-    if not after:
-        _pending_command.pop(window_id, None)
-        return
+    """Poll until the shell prompt returns, then diff + post the new output.
+
+    Instead of the old fixed-delay capture (which truncated any command that
+    took longer than ~1 s), we now:
+
+      1. Wait ``INITIAL_DELAY_SECONDS`` so quick commands settle.
+      2. Loop: re-capture the pane every ``POLL_INTERVAL_SECONDS``, check
+         whether the *original* prompt line (from the pre-send snapshot)
+         has re-appeared at the bottom. If yes → command done, stop.
+      3. Give up at ``WAIT_FOR_PROMPT_SECONDS`` and post whatever's there
+         with a "still running" marker (covers ``tail -f``-style commands).
+
+    Without ccgram's prompt-marker pipeline this is the most reliable
+    "command done" signal we have: the shell re-emits its PS1 only when
+    the command returns control to the user.
+    """
     before = _pre_send_snapshot.pop(window_id, "")
     command = _pending_command.pop(window_id, "").strip()
+
+    await asyncio.sleep(INITIAL_DELAY_SECONDS)
+    elapsed = INITIAL_DELAY_SECONDS
+    after = ""
+    finished = False
+    while elapsed < WAIT_FOR_PROMPT_SECONDS:
+        after = (
+            await tmux_manager.capture_pane_scrollback(
+                window_id, history=CAPTURE_HISTORY_LINES
+            )
+            or ""
+        )
+        if after and _prompt_returned(before, after):
+            finished = True
+            break
+        await asyncio.sleep(POLL_INTERVAL_SECONDS)
+        elapsed += POLL_INTERVAL_SECONDS
+
+    if not after:
+        return
+
     raw_new = _diff_new_lines(before, after, command=command)
     cleaned = _ANSI_RE.sub("", raw_new)
     output = _strip_trailing_prompt(cleaned)
     output = _strip_echoed_command(output, command).rstrip()
 
-    body = _format_body(command, output)
+    body = _format_body(command, output, still_running=not finished)
     if not body:
         return
 
@@ -130,6 +171,36 @@ async def _capture_and_post(
     from ..slack_sender import safe_post
 
     await safe_post(client, channel=channel_id, text=body)
+
+
+def _prompt_returned(before: str, after: str) -> bool:
+    """True iff the pre-send prompt line shows up at the very tail of ``after``.
+
+    Take the last non-empty line of ``before`` (the prompt waiting for input
+    when send_keys fired) and find its *last* occurrence in ``after``. The
+    prompt has "returned" only when everything after that match is empty
+    whitespace — meaning the shell is idle again and waiting for input.
+
+    The naive "needle in last N lines" check returns False positives because
+    when the user just typed ``du -sh *`` the first capture shows
+    ``prompt$ du -sh *`` on one line — the needle is in there, but the
+    command is still running. The tail-empty check eliminates that.
+    """
+    if not before or not after:
+        return False
+    before_lines = [line for line in before.splitlines() if line.strip()]
+    if not before_lines:
+        return False
+    needle = before_lines[-1].rstrip()
+    if not needle:
+        return False
+    idx = after.rfind(needle)
+    if idx < 0:
+        return False
+    # If the only thing after the last prompt occurrence is whitespace, the
+    # shell is idle. If a command echo / output follows, the command is
+    # still running.
+    return after[idx + len(needle) :].strip() == ""
 
 
 def _diff_new_lines(before: str, after: str, command: str = "") -> str:
@@ -207,9 +278,16 @@ def _strip_echoed_command(text: str, command: str) -> str:
     return "\n".join(lines)
 
 
-def _format_body(command: str, output: str) -> str:
-    """Render the Slack post for a captured shell command."""
+def _format_body(command: str, output: str, *, still_running: bool = False) -> str:
+    """Render the Slack post for a captured shell command.
+
+    ``still_running=True`` means we hit ``WAIT_FOR_PROMPT_SECONDS`` without
+    detecting a prompt return — annotate so users know the output is
+    truncated and the command is still going.
+    """
     header = f"> `{command}`" if command else ""
+    if still_running and header:
+        header += f" _(still running — capture stopped at {int(WAIT_FOR_PROMPT_SECONDS)}s)_"
     if output:
         body = f"```\n{output}\n```"
         return f"{header}\n{body}" if header else body
