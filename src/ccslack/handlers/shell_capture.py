@@ -41,6 +41,18 @@ logger = structlog.get_logger()
 # commands need a future port of ccgram's prompt-marker pipeline.
 CAPTURE_DELAY_SECONDS = 0.9
 
+# How many lines of scrollback to capture before/after the keypress. Large
+# enough that the pre-send content remains findable as a substring inside the
+# post-send capture even when the scrollback window has slid by ~30+ lines
+# (e.g. ``rocm-utils`` with multiple GPUs, big build logs).
+CAPTURE_HISTORY_LINES = 500
+
+# Cap on how many lines to retain when the pre-send snapshot can't be located
+# inside the post-send capture (terminal rotated, ``clear`` was issued, etc.).
+# Smaller fallback caps used to truncate medium-sized command output (e.g.
+# 8-GPU rocm-utils header) — 50 fits a typical full table.
+FALLBACK_TAIL_LINES = 50
+
 # Per-window snapshot of pane text taken right before the last send_keys.
 _pre_send_snapshot: dict[str, str] = {}
 # Per-window command text sent on the last send_keys — we use it to (a) strip
@@ -69,7 +81,9 @@ def is_shell_window(window_id: str) -> bool:
 
 async def snapshot_pre_send(window_id: str, command: str = "") -> None:
     """Cache the pane scrollback + command text for diffing after send_keys."""
-    text = await tmux_manager.capture_pane_scrollback(window_id, history=200)
+    text = await tmux_manager.capture_pane_scrollback(
+        window_id, history=CAPTURE_HISTORY_LINES
+    )
     _pre_send_snapshot[window_id] = text or ""
     _pending_command[window_id] = command
 
@@ -94,13 +108,15 @@ async def _capture_and_post(
 ) -> None:
     """Wait briefly, capture pane, diff against snapshot, post the new lines."""
     await asyncio.sleep(CAPTURE_DELAY_SECONDS)
-    after = await tmux_manager.capture_pane_scrollback(window_id, history=200)
+    after = await tmux_manager.capture_pane_scrollback(
+        window_id, history=CAPTURE_HISTORY_LINES
+    )
     if not after:
         _pending_command.pop(window_id, None)
         return
     before = _pre_send_snapshot.pop(window_id, "")
     command = _pending_command.pop(window_id, "").strip()
-    raw_new = _diff_new_lines(before, after)
+    raw_new = _diff_new_lines(before, after, command=command)
     cleaned = _ANSI_RE.sub("", raw_new)
     output = _strip_trailing_prompt(cleaned)
     output = _strip_echoed_command(output, command).rstrip()
@@ -116,20 +132,45 @@ async def _capture_and_post(
     await safe_post(client, channel=channel_id, text=body)
 
 
-def _diff_new_lines(before: str, after: str) -> str:
+def _diff_new_lines(before: str, after: str, command: str = "") -> str:
     """Return the suffix of ``after`` that wasn't in ``before``.
 
-    Both strings are pane snapshots — ``after`` strictly extends ``before`` in
-    the common case (new prompt + command + output appended). Falls back to
-    "last 20 lines of after" when the snapshot prefix doesn't match (e.g.
-    ``clear`` was issued, scrollback rotated, etc.).
+    Capture happens both before and after ``send_keys``, then we diff. The
+    captures come from ``tmux capture-pane -p -J -S -N`` whose window is
+    pinned to the current pane bottom; as new output streams in, the bottom
+    moves down and the window slides too. That means ``after`` rarely starts
+    with ``before`` verbatim — they overlap at some non-zero offset.
+
+    Resolution ladder, most precise first:
+
+    1. **Exact prefix** — perfect-match fast path for trivial cases.
+    2. **Substring rfind of ``before`` in ``after``** — the captured
+       pre-send content exists somewhere inside ``after``; everything after
+       it is the new content. Handles the sliding-window case where
+       ``after.startswith(before)`` is False but the prefix still appears.
+    3. **Command-text anchor** — if neither match works, look for the
+       echoed command line itself. Output starts immediately after that.
+    4. **Last-resort tail** — keep the bottom ``FALLBACK_TAIL_LINES`` lines.
+       Bumped from 20 → 50 so multi-GPU table dumps (rocm-utils etc.) don't
+       lose their header.
     """
     if not before:
         return after
     if after.startswith(before):
         return after[len(before) :]
-    # Snapshot rotated — show the tail.
-    return "\n".join(after.splitlines()[-20:])
+
+    idx = after.rfind(before)
+    if idx >= 0:
+        return after[idx + len(before) :]
+
+    # Command-text anchor — slice from just after the echoed command.
+    if command:
+        for needle in (f"\n{command}\n", f"\n{command}", command):
+            cmd_idx = after.rfind(needle)
+            if cmd_idx >= 0:
+                return after[cmd_idx + len(needle) :]
+
+    return "\n".join(after.splitlines()[-FALLBACK_TAIL_LINES:])
 
 
 def _looks_like_prompt(line: str) -> bool:

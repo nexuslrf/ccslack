@@ -13,11 +13,79 @@ def test_diff_returns_suffix():
     assert _diff_new_lines(before, after) == "\nline3"
 
 
-def test_diff_falls_back_when_snapshot_rotated():
+def test_diff_finds_before_as_substring_when_window_slides():
+    # tmux's `-S -N` window slides as new output streams in; after may
+    # contain extra prefix lines that weren't in before.
+    before = "(base) ruofan@host:/path$ "
+    after = (
+        "earlier-line-A\nearlier-line-B\n"
+        "(base) ruofan@host:/path$ \n"
+        "rocm-utils\n+--+\n| GPU[0] |\n+--+"
+    )
+    out = _diff_new_lines(before, after)
+    assert out.startswith("\nrocm-utils")
+    assert "GPU[0]" in out
+    # Crucially: header lines from the output are not dropped.
+    assert "+--+" in out
+
+
+def test_diff_uses_command_anchor_when_prefix_missing():
+    # If neither startswith nor rfind matches (e.g. terminal redraw munged
+    # the prompt line), fall back to slicing after the command echo.
+    before = "(base) prompt$ "
+    after = "(redrawn prompt)\nrocm-utils\noutput-line-1\noutput-line-2"
+    out = _diff_new_lines(before, after, command="rocm-utils")
+    assert out.strip().startswith("output-line-1")
+
+
+def test_diff_fallback_tail_is_50_lines_not_20():
+    # 30-line output should be returned in full — the fix is that the
+    # fallback was bumped from 20 → 50.
     after = "\n".join(f"l{i}" for i in range(30))
-    out = _diff_new_lines("unrelated", after)
-    # Falls back to the last 20 lines.
-    assert out.splitlines() == [f"l{i}" for i in range(10, 30)]
+    out = _diff_new_lines("unrelated content", after, command="")
+    # All 30 lines preserved (well under the 50 cap).
+    assert out.splitlines() == [f"l{i}" for i in range(30)]
+
+
+def test_diff_fallback_caps_at_50_lines_on_huge_rotation():
+    after = "\n".join(f"l{i}" for i in range(120))
+    out = _diff_new_lines("unrelated content", after, command="")
+    # Bottom 50 retained.
+    assert out.splitlines() == [f"l{i}" for i in range(70, 120)]
+
+
+def test_diff_rocm_utils_full_table_preserved():
+    """End-to-end regression: 8-GPU rocm-utils output should NOT lose its
+    header rows when the capture window slid."""
+    before = "(base) ruofan@amd-03:/path$ "
+    # Pre-send capture had some earlier prompt lines that have since
+    # scrolled the window down; after capture starts midway through them.
+    earlier_noise = "\n".join(f"old-line-{i}" for i in range(15))
+    table = "\n".join(
+        [
+            "+--------+------------+----------------+-------------+",
+            "| ROCm   |   Util (%) | Memory (MiB)   |   Temp (°C) |",
+            "+========+============+================+=============+",
+            *[
+                f"| GPU[{g}] |          0 | 11/65520       |          40 |\n"
+                f"+--------+------------+----------------+-------------+"
+                for g in range(8)
+            ],
+        ]
+    )
+    after = (
+        earlier_noise
+        + "\n"
+        + before
+        + "\nrocm-utils\n"
+        + table
+        + "\n(base) ruofan@amd-03:/path$"
+    )
+    out = _diff_new_lines(before, after, command="rocm-utils")
+    # The full header must survive.
+    assert "| ROCm" in out
+    assert "GPU[0]" in out
+    assert "GPU[7]" in out
 
 
 def test_looks_like_prompt_typical_bash():
