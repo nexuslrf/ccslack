@@ -46,8 +46,15 @@ def forget_window(window_id: str) -> None:
     try:
         from .prompt_probe import clear_window as _clear_probe
     except ImportError:
+        pass
+    else:
+        _clear_probe(window_id)
+    # Same for the marker monitor.
+    try:
+        from ..shell_marker import clear_window as _clear_shell
+    except ImportError:
         return
-    _clear_probe(window_id)
+    _clear_shell(window_id)
 
 
 def start_status_polling(client: SlackClient) -> asyncio.Task[None]:
@@ -121,6 +128,19 @@ async def _tick(client: SlackClient, update_status) -> None:  # noqa: ANN001
         from .prompt_probe import maybe_post_prompt
 
         await maybe_post_prompt(client, channel_id, window_id)
+
+        # Marker-driven shell monitor: for shell-provider windows, passively
+        # poll the pane and relay output as it streams. Falls back silently
+        # when the marker isn't present (handlers/shell_capture.py picks up
+        # the per-send pane-diff path).
+        # Lazy: shell_marker pulls slack_sender; defer to keep the polling
+        # import graph light.
+        from ..shell_marker import check_passive_shell_output, is_shell_window
+
+        if is_shell_window(window_id):
+            await check_passive_shell_output(
+                client, channel_id=channel_id, window_id=window_id
+            )
 
 
 async def _handle_dead(

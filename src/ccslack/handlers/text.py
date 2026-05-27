@@ -23,7 +23,7 @@ from slack_sdk.errors import SlackApiError
 from ..slack_client import BoltSlackClient
 from ..thread_router import thread_router
 from ..tmux_manager import tmux_manager
-from . import shell_capture
+from . import shell_capture, shell_marker
 from .auth import is_authorized
 
 if TYPE_CHECKING:
@@ -60,13 +60,24 @@ def register(app: AsyncApp) -> None:
         if not text.strip():
             return
 
-        # Shell sessions have no transcript — snapshot the pane *before* the
-        # keypress so the post-send capture can diff against it. Pass the
-        # command along so the capture can prefix the post with ``> <cmd>``
-        # and strip the terminal echo of the same line.
+        # Two shell paths in priority order:
+        #   1. Marker-driven (preferred) — when the ⌘N⌘ prompt marker is
+        #      present, the passive monitor in the polling loop picks up
+        #      output as it streams. We just record the user's Slack ts
+        #      so the eventual exit code can land as a ✅/❌ reaction.
+        #   2. Pane-diff fallback — no marker (setup never ran, ``exec
+        #      bash`` blew it away, exotic shell). Use the original
+        #      pre/post snapshot diff.
         is_shell = shell_capture.is_shell_window(window_id)
+        marker_active = False
         if is_shell:
-            await shell_capture.snapshot_pre_send(window_id, command=text)
+            marker_active = await shell_marker.has_marker(window_id)
+            if marker_active:
+                shell_marker.mark_slack_command(
+                    window_id, slack_user_message_ts=event.get("ts", "")
+                )
+            else:
+                await shell_capture.snapshot_pre_send(window_id, command=text)
 
         try:
             await tmux_manager.send_keys(window_id, text)
@@ -75,9 +86,12 @@ def register(app: AsyncApp) -> None:
             await _react(client, channel_id, event.get("ts", ""), "warning")
             return
 
+        # ✓ reaction confirms the keypress reached tmux. On the marker path,
+        # this will be replaced by ✅ / ❌ from ``shell_marker`` once the
+        # command finishes and the exit code lands.
         await _react(client, channel_id, event.get("ts", ""), "white_check_mark")
 
-        if is_shell:
+        if is_shell and not marker_active:
             shell_capture.schedule_capture(
                 BoltSlackClient(client), channel_id, window_id
             )

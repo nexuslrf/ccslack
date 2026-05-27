@@ -88,6 +88,9 @@ max-statements = 60
 "src/ccslack/handlers/meta.py" = ["C901", "PLR0911", "PLR0912", "PLR0915"]
 # WindowState.to_dict has many opt-in fields; branches grow linearly with them.
 "src/ccslack/window_state_store.py" = ["PLR0912"]
+# Inbound text dispatch forks on marker vs pane-diff shell capture;
+# complexity is inherent to that branching, not a smell.
+"src/ccslack/handlers/text.py" = ["C901"]
 
 [tool.deptry.per_rule_ignores]
 DEP002 = ["deptry", "pyright", "pytest", "pytest-asyncio", "pytest-cov", "pytest-timeout", "ruff", "hypothesis"]

@@ -17,6 +17,7 @@ Only allowed in the configured meta channel. Replies in other channels go via
 
 from __future__ import annotations
 
+import contextlib
 import re
 import shlex
 import structlog
@@ -460,6 +461,16 @@ async def _handle_new(
     thread_router.bind_channel(new_channel, window_id, window_name=window_name)
     session_manager.set_window_provider(window_id, provider, cwd=str(spawn_dir))
     session_manager.set_window_origin(window_id, "ccslack_created")
+
+    # Inject the ``⌘N⌘`` prompt marker for shell sessions so the passive
+    # shell-output monitor can detect command boundaries and exit codes.
+    # Lazy: pulls subprocess + libtmux helpers only when we actually have
+    # a shell session to set up.
+    if provider == "shell":
+        from ..providers.shell_infra import setup_shell_prompt
+
+        with contextlib.suppress(OSError, RuntimeError):
+            await setup_shell_prompt(window_id, clear=True)
     if created_worktree_path is not None and created_worktree_branch is not None:
         session_manager.set_window_worktree(
             window_id, str(created_worktree_path), created_worktree_branch
