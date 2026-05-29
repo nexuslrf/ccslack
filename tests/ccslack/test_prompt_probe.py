@@ -1,4 +1,12 @@
-from ccslack.handlers.polling.prompt_probe import _looks_like_prompt
+import time
+
+from ccslack.handlers.polling import prompt_probe
+from ccslack.handlers.polling.prompt_probe import (
+    DISMISS_COOLDOWN_SECONDS,
+    _looks_like_prompt,
+    clear_dismiss,
+    mark_dismissed,
+)
 
 
 def test_detects_codex_picker_with_selector_and_numbered_list():
@@ -42,3 +50,25 @@ def test_rejects_numbered_list_without_selector():
     tail = "Here are three things:\n1. first\n2. second\n3. third"
     # Selector arrow missing → must not match. y/n absent too.
     assert _looks_like_prompt(tail) is False
+
+
+def test_mark_dismissed_sets_cooldown():
+    clear_dismiss("C0X")
+    before = time.monotonic()
+    mark_dismissed("C0X")
+    until = prompt_probe._dismissed_until.get("C0X", 0.0)
+    # The cooldown window should land within the expected range.
+    assert before + DISMISS_COOLDOWN_SECONDS - 1 <= until <= before + DISMISS_COOLDOWN_SECONDS + 1
+    clear_dismiss("C0X")
+
+
+def test_clear_dismiss_removes_cooldown():
+    mark_dismissed("C0Y")
+    assert "C0Y" in prompt_probe._dismissed_until
+    clear_dismiss("C0Y")
+    assert "C0Y" not in prompt_probe._dismissed_until
+
+
+def test_dismiss_cooldown_constant_is_reasonable():
+    # Sanity-check we haven't accidentally set this to something absurd.
+    assert 5.0 <= DISMISS_COOLDOWN_SECONDS <= 300.0

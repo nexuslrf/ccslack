@@ -49,7 +49,19 @@ def forget_window(window_id: str) -> None:
         pass
     else:
         _clear_probe(window_id)
-    # Same for the marker monitor.
+    # Drop the dismiss cooldown too — channel/window is going away.
+    try:
+        from ..interactive import session_for_window as _session_for_window
+        from .prompt_probe import clear_dismiss as _clear_dismiss
+    except ImportError:
+        pass
+    else:
+        # No direct channel→window reverse here; clear by iterating dismiss map
+        # would need the channel id. Best-effort: skip if we can't get it.
+        session = _session_for_window(window_id)
+        if session is not None:
+            _clear_dismiss(session.channel_id)
+    # Marker monitor cleanup.
     try:
         from ..shell_marker import clear_window as _clear_shell
     except ImportError:

@@ -25,6 +25,7 @@ from __future__ import annotations
 import hashlib
 import re
 import structlog
+import time
 from typing import TYPE_CHECKING
 
 from ...session import session_manager
@@ -34,6 +35,13 @@ if TYPE_CHECKING:
     from ...slack_client import SlackClient
 
 logger = structlog.get_logger()
+
+# How long to honour an explicit user dismissal of the picker. While the
+# cooldown is active the prober won't repost a picker for the same channel,
+# even if the pane still looks like a prompt. The cooldown extends naturally:
+# every fresh tool_use re-entry resets the channel's interactive-mode state,
+# and a fresh dismiss restarts the timer.
+DISMISS_COOLDOWN_SECONDS = 30.0
 
 # Providers that fire Notification hooks already — don't double-post.
 _HOOK_DRIVEN_PROVIDERS = {"claude", "pi"}
@@ -55,11 +63,30 @@ _YN_RE = re.compile(r"\[y/n\]|\[Y/n\]|\[y/N\]|\(y/n\)|\(Y/n\)|\(y/N\)", re.IGNOR
 
 # Per-window last-posted prompt hash.
 _last_prompt_hash: dict[str, str] = {}
+# Per-channel "user explicitly dismissed" cooldown — monotonic seconds.
+_dismissed_until: dict[str, float] = {}
 
 
 def clear_window(window_id: str) -> None:
     """Drop dedup state for a window (called on archive / unbind / activity)."""
     _last_prompt_hash.pop(window_id, None)
+
+
+def mark_dismissed(channel_id: str) -> None:
+    """Block re-posting for this channel for ``DISMISS_COOLDOWN_SECONDS``.
+
+    Called from ``handlers/interactive.exit_interactive_mode`` when the user
+    explicitly dismisses the picker. The cooldown stops the regex prober from
+    immediately re-detecting the same TUI prompt and reposting another picker
+    while the agent is still waiting — which is otherwise unavoidable since
+    the pane still looks like a prompt.
+    """
+    _dismissed_until[channel_id] = time.monotonic() + DISMISS_COOLDOWN_SECONDS
+
+
+def clear_dismiss(channel_id: str) -> None:
+    """Drop the dismiss cooldown for this channel (e.g. on archive)."""
+    _dismissed_until.pop(channel_id, None)
 
 
 def _strip_ansi(text: str) -> str:
@@ -94,6 +121,16 @@ async def maybe_post_prompt(
     and for providers that show prompts before the matching ``tool_use``
     streams into the transcript.
     """
+    # Honour an explicit dismissal — without this, the prober immediately
+    # reposts the picker on the next tick because the TUI prompt is still up.
+    dismissed_until = _dismissed_until.get(channel_id, 0.0)
+    if dismissed_until and time.monotonic() < dismissed_until:
+        return
+    if dismissed_until:
+        # Cooldown elapsed — clear so a *new* prompt (different content) can
+        # still trigger a fresh picker without waiting another cooldown.
+        _dismissed_until.pop(channel_id, None)
+
     # Lazy: interactive module owns the live-picker singleton dict.
     from ..interactive import is_in_interactive_mode
 

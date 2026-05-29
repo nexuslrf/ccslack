@@ -374,10 +374,25 @@ async def exit_interactive_mode(
     *,
     reason: str = "resolved",
 ) -> bool:
-    """Close the live picker for ``channel_id``. Returns True if one was active."""
+    """Close the live picker for ``channel_id``. Returns True if one was active.
+
+    When ``reason == "dismissed"`` (user clicked Dismiss), also sets a
+    cooldown in ``polling/prompt_probe`` so the regex prober doesn't
+    immediately repost the picker while the TUI prompt is still up. Without
+    this the user can't actually "win" the dismiss against a still-waiting
+    Codex / Gemini approval prompt.
+    """
     session = _active.pop(channel_id, None)
     if session is None:
         return False
+    if reason == "dismissed":
+        # Lazy: avoid the polling import in the cold-import path.
+        try:
+            from .polling.prompt_probe import mark_dismissed
+        except ImportError:
+            pass
+        else:
+            mark_dismissed(channel_id)
     await _close_session(client, session, reason=reason)
     return True
 
