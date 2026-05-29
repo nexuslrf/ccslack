@@ -36,11 +36,11 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-# How long to honour an explicit user dismissal of the picker. While the
-# cooldown is active the prober won't repost a picker for the same channel,
-# even if the pane still looks like a prompt. The cooldown extends naturally:
-# every fresh tool_use re-entry resets the channel's interactive-mode state,
-# and a fresh dismiss restarts the timer.
+# Per-tick re-extension window for an explicit user dismissal. Each polling
+# tick that still finds the dismissed prompt up extends the cooldown by this
+# much, so the dismiss effectively lasts as long as the prompt is on-screen.
+# Picked to be a couple of polling intervals so a temporary capture failure
+# doesn't accidentally end the cooldown early.
 DISMISS_COOLDOWN_SECONDS = 30.0
 
 # Providers that fire Notification hooks already — don't double-post.
@@ -73,13 +73,14 @@ def clear_window(window_id: str) -> None:
 
 
 def mark_dismissed(channel_id: str) -> None:
-    """Block re-posting for this channel for ``DISMISS_COOLDOWN_SECONDS``.
+    """Block re-posting for this channel until the prompt actually goes away.
 
     Called from ``handlers/interactive.exit_interactive_mode`` when the user
-    explicitly dismisses the picker. The cooldown stops the regex prober from
-    immediately re-detecting the same TUI prompt and reposting another picker
-    while the agent is still waiting — which is otherwise unavoidable since
-    the pane still looks like a prompt.
+    explicitly dismisses the picker. ``maybe_post_prompt`` re-extends the
+    cooldown on every subsequent tick that still finds the prompt up, so the
+    dismiss is effectively permanent until the agent moves on (at which
+    point ``_looks_like_prompt`` returns False and the cooldown is cleared
+    so a fresh prompt can re-fire).
     """
     _dismissed_until[channel_id] = time.monotonic() + DISMISS_COOLDOWN_SECONDS
 
@@ -121,16 +122,6 @@ async def maybe_post_prompt(
     and for providers that show prompts before the matching ``tool_use``
     streams into the transcript.
     """
-    # Honour an explicit dismissal — without this, the prober immediately
-    # reposts the picker on the next tick because the TUI prompt is still up.
-    dismissed_until = _dismissed_until.get(channel_id, 0.0)
-    if dismissed_until and time.monotonic() < dismissed_until:
-        return
-    if dismissed_until:
-        # Cooldown elapsed — clear so a *new* prompt (different content) can
-        # still trigger a fresh picker without waiting another cooldown.
-        _dismissed_until.pop(channel_id, None)
-
     # Lazy: interactive module owns the live-picker singleton dict.
     from ..interactive import is_in_interactive_mode
 
@@ -155,8 +146,29 @@ async def maybe_post_prompt(
     tail_lines = cleaned.splitlines()[-_TAIL_LINES:]
     tail = "\n".join(tail_lines)
     if not _looks_like_prompt(tail):
-        # If the agent moved on, allow the next prompt to re-trigger.
+        # Agent moved on — the prompt the user dismissed is gone. Clear both
+        # the dedup hash and the dismiss cooldown so the next prompt
+        # (genuinely new content) can fire a fresh picker.
         _last_prompt_hash.pop(window_id, None)
+        _dismissed_until.pop(channel_id, None)
+        return
+
+    # Honour an explicit dismissal — and *extend* the cooldown for as long
+    # as the prompt is still up. A fixed-duration cooldown isn't enough:
+    # the agent's prompt typically stays on-screen for minutes (waiting
+    # for the user) and pane micro-changes (cursor blink, partial
+    # redraws) make the dedup hash differ between ticks. Re-extending
+    # the cooldown while the prompt persists makes the dismiss feel
+    # permanent until the prompt actually goes away.
+    if channel_id in _dismissed_until:
+        _dismissed_until[channel_id] = (
+            time.monotonic() + DISMISS_COOLDOWN_SECONDS
+        )
+        # Also refresh the dedup hash so a subsequent post-dismiss tick
+        # with the same pane content short-circuits via the cheaper hash
+        # check (skip the cooldown branch).
+        digest = _hash_pane(tail)
+        _last_prompt_hash[window_id] = digest
         return
 
     digest = _hash_pane(tail)

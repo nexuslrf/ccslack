@@ -1,4 +1,8 @@
+import asyncio
 import time
+from unittest.mock import patch
+
+import pytest
 
 from ccslack.handlers.polling import prompt_probe
 from ccslack.handlers.polling.prompt_probe import (
@@ -7,6 +11,7 @@ from ccslack.handlers.polling.prompt_probe import (
     clear_dismiss,
     mark_dismissed,
 )
+from ccslack.slack_client import FakeSlackClient
 
 
 def test_detects_codex_picker_with_selector_and_numbered_list():
@@ -72,3 +77,92 @@ def test_clear_dismiss_removes_cooldown():
 def test_dismiss_cooldown_constant_is_reasonable():
     # Sanity-check we haven't accidentally set this to something absurd.
     assert 5.0 <= DISMISS_COOLDOWN_SECONDS <= 300.0
+
+
+@pytest.mark.asyncio
+async def test_dismiss_cooldown_self_extends_while_prompt_present():
+    """Regression for the bug where the picker reposted exactly 30 s after
+    a Dismiss because the Codex prompt was still on-screen and the pane
+    micro-changed during the cooldown window. Self-extension keeps the
+    cooldown alive until ``_looks_like_prompt`` returns False."""
+    prompt_probe._dismissed_until.clear()
+    prompt_probe._last_prompt_hash.clear()
+
+    channel_id = "C0X"
+    window_id = "@1"
+
+    # Pretend a real prompt is up.
+    tail = "› 1. Yes, proceed (y)\n  2. No\n  3. Yes, always"
+
+    client = FakeSlackClient()
+
+    async def fake_capture(_wid, history=0, with_ansi=False):  # noqa: ANN001
+        return tail
+
+    async def noop_enter(*args, **kwargs):  # noqa: ANN001
+        raise AssertionError("enter_from_pane should not be called while dismissed")
+
+    # Seed dismissal.
+    mark_dismissed(channel_id)
+    initial_until = prompt_probe._dismissed_until[channel_id]
+    # Make the cooldown look like it's about to expire.
+    prompt_probe._dismissed_until[channel_id] = time.monotonic() + 0.05
+
+    with (
+        patch.object(
+            prompt_probe.session_manager, "view_window", return_value=type(
+                "V", (), {"provider_name": "codex"}
+            )(),
+        ),
+        patch.object(
+            prompt_probe.tmux_manager, "capture_pane_scrollback", side_effect=fake_capture
+        ),
+        patch("ccslack.handlers.interactive.is_in_interactive_mode", return_value=False),
+        patch("ccslack.handlers.interactive.enter_from_pane", side_effect=noop_enter),
+    ):
+        await prompt_probe.maybe_post_prompt(client, channel_id, window_id)
+
+    # The tick should NOT have posted a picker and should have *extended*
+    # the cooldown to a fresh DISMISS_COOLDOWN_SECONDS window.
+    extended_until = prompt_probe._dismissed_until.get(channel_id, 0.0)
+    assert extended_until > initial_until - 1.0  # strictly later than original setpoint
+    assert client.call_count("chat_postMessage") == 0
+
+    prompt_probe._dismissed_until.clear()
+    prompt_probe._last_prompt_hash.clear()
+
+
+@pytest.mark.asyncio
+async def test_dismiss_cooldown_clears_when_prompt_goes_away():
+    """When ``_looks_like_prompt`` returns False (agent moved on) the
+    cooldown is cleared so a *next* prompt can fire a fresh picker."""
+    prompt_probe._dismissed_until.clear()
+    prompt_probe._last_prompt_hash.clear()
+
+    channel_id = "C0Y"
+    window_id = "@2"
+    mark_dismissed(channel_id)
+
+    # Capture returns content that is NOT a prompt anymore.
+    async def fake_capture(_wid, history=0, with_ansi=False):  # noqa: ANN001
+        return "ordinary command output\nno prompt here\n"
+
+    client = FakeSlackClient()
+    with (
+        patch.object(
+            prompt_probe.session_manager,
+            "view_window",
+            return_value=type("V", (), {"provider_name": "codex"})(),
+        ),
+        patch.object(
+            prompt_probe.tmux_manager,
+            "capture_pane_scrollback",
+            side_effect=fake_capture,
+        ),
+        patch("ccslack.handlers.interactive.is_in_interactive_mode", return_value=False),
+    ):
+        await prompt_probe.maybe_post_prompt(client, channel_id, window_id)
+
+    assert channel_id not in prompt_probe._dismissed_until
+    asyncio.get_event_loop()  # quiet pytest-asyncio fixture warnings
+    prompt_probe._last_prompt_hash.clear()
