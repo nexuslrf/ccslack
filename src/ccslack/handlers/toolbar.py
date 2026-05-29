@@ -25,7 +25,6 @@ https://man7.org/linux/man-pages/man1/tmux.1.html#KEY_BINDINGS.
 
 from __future__ import annotations
 
-import contextlib
 import structlog
 from typing import TYPE_CHECKING, Any
 
@@ -222,12 +221,21 @@ def register(app: AsyncApp) -> None:
         from .auth import is_authorized
 
         if not is_authorized(user_id, channel_id) or not channel_id:
+            logger.info(
+                "toolbar close: auth rejected (user=%s channel=%s)",
+                user_id,
+                channel_id,
+            )
             return
         ts = (body.get("message") or {}).get("ts")
         if not ts:
+            logger.warning("toolbar close: no message ts in action body")
             return
-        with contextlib.suppress(SlackApiError):
-            await client.chat_delete(channel=channel_id, ts=ts)
+        # Lazy: shared close helper lives in slack_sender; pulling at call
+        # site keeps the toolbar import graph thin.
+        from ..slack_sender import safe_close_message
+
+        await safe_close_message(client, channel=channel_id, ts=ts, label="toolbar")
 
     # One handler matches every ccslack_key:<...> action_id. Bolt's matcher
     # supports regex; we use a prefix predicate so each key only needs the

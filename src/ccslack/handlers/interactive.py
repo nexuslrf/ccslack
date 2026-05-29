@@ -434,8 +434,15 @@ async def _close_session(
         with contextlib.suppress(asyncio.CancelledError):
             await session.refresh_task
 
-    with contextlib.suppress(SlackApiError):
-        await client.chat_delete(channel=session.channel_id, ts=session.message_ts)
+    # Lazy: shared delete-with-fallback helper.
+    from ..slack_sender import safe_close_message
+
+    await safe_close_message(
+        client,
+        channel=session.channel_id,
+        ts=session.message_ts,
+        label=f"picker ({reason})",
+    )
 
     logger.info(
         "interactive: closed for window %s in channel %s (reason=%s)",

@@ -188,10 +188,51 @@ async def safe_send_long(
     return sent
 
 
+async def safe_close_message(
+    client: SlackClient,
+    *,
+    channel: str,
+    ts: str,
+    label: str,
+) -> None:
+    """Close a bot-posted message: try ``chat.delete``, fall back to ``chat.update``.
+
+    Some workspaces (Enterprise Grid retention / compliance locks) refuse
+    ``chat.delete`` on bot messages even when ``chat:write`` is granted. The
+    UX bug from that path is that "Close" / "Dismiss" buttons appear to do
+    nothing. This helper keeps ``chat.delete`` as the preferred path (cleaner
+    channel history) and falls through to a small ``:lock: _{label} closed_``
+    stub via ``chat.update`` so the user always sees the click registered.
+    """
+    try:
+        await client.chat_delete(channel=channel, ts=ts)
+        return
+    except SlackApiError as exc:
+        error = exc.response.get("error") if exc.response else str(exc)
+        logger.info(
+            "chat.delete refused (%s); falling back to chat.update for %s",
+            error,
+            label,
+        )
+
+    closed_text = f":lock: _{label} closed_"
+    blocks = [
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": closed_text}]}
+    ]
+    try:
+        await client.chat_update(
+            channel=channel, ts=ts, text=closed_text, blocks=blocks
+        )
+    except SlackApiError as exc:
+        error = exc.response.get("error") if exc.response else str(exc)
+        logger.warning("chat.update fallback also failed for %s: %s", label, error)
+
+
 __all__ = [
     "MAX_POST_CHARS",
     "MIN_INTERVAL_SECONDS",
     "rate_limit_send",
+    "safe_close_message",
     "safe_post",
     "safe_send_long",
     "safe_update",

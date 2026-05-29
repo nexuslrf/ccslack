@@ -324,6 +324,26 @@ class FakeSlackClient:
                 return call
         return None
 
+    def set_side_effect(self, method: str, effects: list[Any]) -> None:
+        """Queue per-call return values / exceptions for ``method``.
+
+        Each element of ``effects`` is consumed in order on successive calls:
+
+          * An ``Exception`` instance — raised by the method.
+          * Anything else — returned as the method's value.
+
+        Mirrors ``unittest.mock.Mock.side_effect`` for the iterable case.
+        """
+        iterator = iter(effects)
+
+        def step(**_kwargs: Any) -> Any:
+            value = next(iterator)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+        self.returns[method] = step
+
     async def chat_postMessage(
         self, *, channel: str, text: str = "", **kwargs: Any
     ) -> Any:
