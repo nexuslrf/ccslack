@@ -114,8 +114,8 @@ transcription module is ported.)
 
 | Variable | Default | Description |
 |---|---|---|
-| `CCSLACK_SEND_SEARCH_DEPTH` | `5` | Max directory depth for future `/ccslack send` glob search (current implementation accepts exact paths only). |
-| `CCSLACK_SEND_MAX_RESULTS` | `50` | Max results returned by `/ccslack send` search. |
+| `CCSLACK_SEND_SEARCH_DEPTH` | `5` | Max directory depth walked by `/ccslack send` glob / substring search. |
+| `CCSLACK_SEND_MAX_RESULTS` | `50` | Max files returned by `/ccslack send` glob / substring search. |
 
 ### Inter-agent messaging (reserved)
 

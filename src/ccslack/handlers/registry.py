@@ -37,6 +37,7 @@ def register_all(app: AsyncApp) -> None:
         "interactive",
         "new_modal",
         "resume",
+        "send",
         "recovery",
     ):
         try:

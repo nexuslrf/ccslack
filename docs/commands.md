@@ -129,12 +129,26 @@ multi-pane team.
 - **Where**: a bound session channel.
 - **Auth**: channel membership.
 
-### `/ccslack send <path>`
+### `/ccslack send <path|glob|substring>`
 
-Upload a file from the session's cwd to the channel. Resolves relative
-paths against the cwd; absolute paths must still be inside cwd.
+Upload file(s) — including images, which Slack previews inline — from the
+session's cwd to the channel. Three modes, auto-detected from the argument:
 
-Security filters (all enforced, deny-by-default):
+| Argument | Mode | Behaviour |
+|---|---|---|
+| `docs/arch.png` | exact path | Upload that file (relative to cwd; absolute paths must be inside cwd). |
+| `*.png`, `report-??.csv` | glob | `fnmatch` over filenames in the cwd tree. |
+| `arch` | substring | Case-insensitive filename search in the cwd tree. |
+
+For glob / substring: the cwd is walked (depth-capped by
+`CCSLACK_SEND_SEARCH_DEPTH`, excluded dirs like `node_modules` / `.venv`
+pruned, capped at `CCSLACK_SEND_MAX_RESULTS`). **One** match uploads
+immediately; **multiple** matches post an ephemeral picker — one button per
+file (🖼️ for images, 📄 otherwise), plus an **Upload all N** button when the
+count is ≤10.
+
+Security filters (all enforced on every upload — direct, picked, or bulk;
+deny-by-default):
 - Path containment (resolved path must stay inside cwd; blocks `../`
   and symlink escapes)
 - Hidden files / directories (`.`-prefixed) denied
@@ -144,7 +158,9 @@ Security filters (all enforced, deny-by-default):
 - 50 MB Slack file cap
 
 - **Where**: a bound session channel.
-- **Auth**: channel membership.
+- **Auth**: channel membership (the picker buttons re-check on click).
+- **Tunables**: `CCSLACK_SEND_SEARCH_DEPTH` (5), `CCSLACK_SEND_MAX_RESULTS`
+  (50) — see [configuration](configuration.md).
 
 ### `/ccslack mute [all|errors|off]`
 

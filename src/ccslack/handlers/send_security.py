@@ -19,7 +19,7 @@ from pathlib import Path
 
 import structlog
 
-from ...utils import assert_sendable
+from ..utils import assert_sendable
 
 logger = structlog.get_logger()
 
