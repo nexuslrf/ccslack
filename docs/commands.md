@@ -88,22 +88,37 @@ rebinds the channel.
 ### `/ccslack restore [continue|resume|fresh]`
 
 Recovers a session whose tmux window died — typically after a host
-**reboot** or `tmux kill-server`. Rebuilds the tmux window and relaunches
-the agent, then rebinds the channel to the new window.
+**reboot** or `tmux kill-server`. **Reuses the current channel** (never
+creates a new one): rebuilds the tmux window, relaunches the agent, and
+binds *this* channel to the new window.
 
 | Mode | Behaviour |
 |---|---|
 | `continue` (default) | Relaunch and continue the latest session (`claude --continue`, `codex resume --last`, …). |
-| `resume` | Relaunch with the remembered session id (`claude --resume <id>`, `codex resume <id>`); falls back to `continue` when no id is known. |
+| `resume` | Relaunch with the remembered (or, for an unbound channel, the most-recent discovered) session id (`claude --resume <id>`, `codex resume <id>`); falls back to `continue` when no id is known. |
 | `fresh` | Relaunch a clean session. |
 
-Refuses if the window is still alive (use `/ccslack kill` first if you
-want a clean start). For unattended recovery on every reboot, set
-`CCSLACK_RESTORE_ON_START=continue` (or `resume`) instead — see
-[configuration](configuration.md).
+Works in two situations:
 
-- **Where**: a bound session channel.
-- **Auth**: channel membership.
+- **Binding intact** — the channel still points at the (now-dead) window.
+  Respawns from its remembered provider / cwd / session id. Refuses if the
+  window is somehow still alive (use `/ccslack kill` first to start over).
+- **Binding lost** — the channel is no longer bound (e.g. the bot's state
+  was reset) but it's still a ccslack session channel. ccslack recovers the
+  provider + cwd from the channel's own **topic** (which it wrote as
+  `<provider> · <cwd>` at creation) and re-adopts the channel in place. If
+  the topic isn't recognisable, restore declines and points you at
+  `/ccslack new`.
+
+For unattended recovery on every reboot, set
+`CCSLACK_RESTORE_ON_START=continue` (or `resume`) instead — see
+[configuration](configuration.md). (Auto-recovery only covers channels
+whose binding survived; a lost binding needs a manual `/ccslack restore`
+in the channel.)
+
+- **Where**: a session channel (bound, or an unbound former session channel).
+- **Auth**: channel membership (bound) / `ALLOWED_USERS` (unbound — the
+  channel isn't a recognised member channel until re-adopted).
 
 ### `/ccslack panes`
 

@@ -1,7 +1,14 @@
 import pytest
 
-from ccslack.handlers.recovery import _build_launch_args
+from ccslack.handlers.recovery import (
+    _build_launch_args,
+    _build_launch_args_for,
+    _slug_from_cwd,
+    parse_channel_topic,
+    recover_channel_context,
+)
 from ccslack.session import session_manager
+from ccslack.slack_client import FakeSlackClient
 from ccslack.window_state_store import window_store
 
 CLAUDE_ID = "01234567-89ab-cdef-0123-456789abcdef"
@@ -53,3 +60,65 @@ def test_resume_without_session_id_falls_back_to_continue(seeded):
 def test_unknown_window_returns_empty():
     window_store.window_states.clear()
     assert _build_launch_args("@999", "resume") == ""
+
+
+# --- topic parsing / re-adoption -------------------------------------------
+
+
+def test_parse_channel_topic_basic():
+    assert parse_channel_topic("claude · /home/me/proj") == (
+        "claude",
+        "/home/me/proj",
+    )
+
+
+def test_parse_channel_topic_lowercases_provider():
+    assert parse_channel_topic("Codex · /tmp/x") == ("codex", "/tmp/x")
+
+
+def test_parse_channel_topic_rejects_garbage():
+    assert parse_channel_topic("") is None
+    assert parse_channel_topic("just some words") is None
+    assert parse_channel_topic("claude ·  ") is None
+    assert parse_channel_topic(" · /tmp/x") is None
+
+
+def test_build_launch_args_for_shell_is_empty():
+    assert _build_launch_args_for("shell", "", "continue") == ""
+
+
+def test_build_launch_args_for_codex_continue():
+    assert _build_launch_args_for("codex", "", "continue") == "resume --last"
+
+
+def test_build_launch_args_for_claude_resume_with_id():
+    assert _build_launch_args_for("claude", CLAUDE_ID, "resume") == (
+        f"--resume {CLAUDE_ID}"
+    )
+
+
+def test_slug_from_cwd():
+    assert _slug_from_cwd("/home/me/My Project") == "my-project"
+    assert _slug_from_cwd("/tmp/") == "tmp"
+    assert _slug_from_cwd("") == "session"
+
+
+@pytest.mark.asyncio
+async def test_recover_channel_context_reads_topic():
+    client = FakeSlackClient()
+    client.returns["conversations_info"] = {
+        "ok": True,
+        "channel": {"topic": {"value": "codex · /nvmepool/ruofan/projects_leo"}},
+    }
+    ctx = await recover_channel_context(client, "C0LOST")
+    assert ctx == ("codex", "/nvmepool/ruofan/projects_leo")
+
+
+@pytest.mark.asyncio
+async def test_recover_channel_context_empty_topic_returns_none():
+    client = FakeSlackClient()
+    client.returns["conversations_info"] = {
+        "ok": True,
+        "channel": {"topic": {"value": ""}},
+    }
+    assert await recover_channel_context(client, "C0LOST") is None

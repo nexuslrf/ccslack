@@ -583,21 +583,17 @@ async def _handle_restore(
 ) -> None:
     """``/ccslack restore [continue|resume|fresh]`` — respawn this channel's agent.
 
-    Useful after a reboot / tmux restart: rebuilds the dead tmux window and
-    relaunches the agent. Default mode is ``continue`` (picks up the most
-    recent session for the provider); ``resume`` uses the remembered session
-    id; ``fresh`` starts a clean session.
-    """
-    window_id = thread_router.get_window_for_channel(channel_id)
-    if window_id is None:
-        await _post_ephemeral(
-            client.chat_postEphemeral,
-            channel=channel_id,
-            user=user_id,
-            text="ccslack: `restore` only works inside a bound session channel.",
-        )
-        return
+    Reuses the *current* channel (never creates a new one). Two cases:
 
+      * **bound channel** — the binding still points at a (now-dead) window:
+        respawn from its remembered provider / cwd / session id.
+      * **unbound channel** — the binding was lost (reboot, state reset) but
+        this is still a ccslack session channel: recover provider + cwd from
+        the channel's own topic and re-adopt it.
+
+    Modes: ``continue`` (default — latest session), ``resume`` (remembered /
+    discovered session id), ``fresh`` (clean session).
+    """
     mode = "continue"
     if args:
         resolved = _RESTORE_ALIASES.get(args[0].lower())
@@ -614,33 +610,75 @@ async def _handle_restore(
             return
         mode = resolved
 
-    # If the window is actually still alive, restoring would needlessly kill it.
-    live = await tmux_manager.find_window_by_id(window_id)
-    if live is not None:
+    # Lazy: recovery pulls provider + status helpers.
+    from .recovery import (
+        _latest_session_id_for,
+        recover_channel_context,
+        restore_in_channel,
+        restore_window,
+    )
+
+    window_id = thread_router.get_window_for_channel(channel_id)
+
+    # --- bound channel: restore from the dead window's remembered state -----
+    if window_id is not None:
+        live = await tmux_manager.find_window_by_id(window_id)
+        if live is not None:
+            await _post_ephemeral(
+                client.chat_postEphemeral,
+                channel=channel_id,
+                user=user_id,
+                text=(
+                    f"ccslack: window `{window_id}` is still alive — restore is "
+                    "for dead sessions. Use `/ccslack kill` first to start over."
+                ),
+            )
+            return
+        new_window_id = await restore_window(
+            client, channel_id, window_id, mode=mode, announce=True
+        )
+        if new_window_id is None:
+            await _post_ephemeral(
+                client.chat_postEphemeral,
+                channel=channel_id,
+                user=user_id,
+                text=f"ccslack restore ({mode}): respawn failed (check logs).",
+            )
+        return
+
+    # --- unbound channel: re-adopt from the channel's topic -----------------
+    context = await recover_channel_context(client, channel_id)
+    if context is None:
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
             user=user_id,
             text=(
-                f"ccslack: window `{window_id}` is still alive — restore is for "
-                "dead sessions (after reboot / tmux restart). Use `/ccslack kill` "
-                "first if you want to start over."
+                "ccslack: this channel has no binding and its topic doesn't look "
+                "like a ccslack session (`<provider> · <cwd>`). Restore can't "
+                "recover it — start a new session with `/ccslack new <dir>` in "
+                "the meta channel."
             ),
         )
         return
-
-    # Lazy: recovery pulls provider + status helpers.
-    from .recovery import restore_window
-
-    new_window_id = await restore_window(
-        client, channel_id, window_id, mode=mode, announce=True
+    provider, cwd = context
+    session_id = _latest_session_id_for(provider, cwd) if mode == "resume" else ""
+    new_window_id = await restore_in_channel(
+        client,
+        channel_id,
+        provider=provider,
+        cwd=cwd,
+        session_id=session_id,
+        mode=mode,
+        old_window_id=None,
+        announce=True,
     )
     if new_window_id is None:
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
             user=user_id,
-            text=f"ccslack restore ({mode}): respawn failed (check logs).",
+            text=f"ccslack restore ({mode}): re-adopt failed (check logs).",
         )
 
 
