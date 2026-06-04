@@ -19,12 +19,16 @@ from __future__ import annotations
 
 import contextlib
 import structlog
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from slack_sdk.errors import SlackApiError
 
 from ..config import config
-from ..providers import resolve_capabilities, resolve_launch_command
+from ..providers import (
+    get_provider_for_window,
+    resolve_capabilities,
+    resolve_launch_command,
+)
 from ..session import session_manager
 from ..slack_client import BoltSlackClient
 from ..thread_router import thread_router
@@ -37,6 +41,43 @@ if TYPE_CHECKING:
     from ..slack_client import SlackClient
 
 logger = structlog.get_logger()
+
+# How an agent should be relaunched when its window died.
+RestoreMode = Literal["fresh", "continue", "resume"]
+
+
+def _build_launch_args(window_id: str, mode: RestoreMode) -> str:
+    """Build provider-correct CLI args for relaunching a dead window's agent.
+
+    Uses ``provider.make_launch_args`` so each provider's resume syntax is
+    honoured — Claude uses ``--continue`` / ``--resume <id>`` while Codex uses
+    the ``resume --last`` / ``resume <id>`` subcommand form. Returns an empty
+    string for ``fresh`` (or when the provider can't resume / no id is known).
+    """
+    if mode == "fresh":
+        return ""
+    view = session_manager.view_window(window_id)
+    if view is None:
+        return ""
+    provider = get_provider_for_window(window_id, provider_name=view.provider_name)
+    caps = provider.capabilities
+
+    if mode == "resume":
+        session_id = (view.session_id or "").strip()
+        if session_id and caps.supports_resume:
+            try:
+                return provider.make_launch_args(resume_id=session_id)
+            except ValueError:
+                logger.warning(
+                    "restore: invalid session id %r for %s; using continue",
+                    session_id,
+                    view.provider_name,
+                )
+        mode = "continue"  # fall through to continue when resume isn't possible
+
+    if mode == "continue" and caps.supports_continue:
+        return provider.make_launch_args(use_continue=True)
+    return ""
 
 
 def _build_banner_blocks(window_id: str) -> tuple[list[dict[str, Any]], str]:
@@ -152,26 +193,132 @@ async def _respawn_window(
     return success, message, new_window_id
 
 
+async def restore_window(
+    client: SlackClient,
+    channel_id: str,
+    window_id: str,
+    *,
+    mode: RestoreMode,
+    announce: bool = True,
+) -> str | None:
+    """Respawn a dead window's agent and rebind the channel to the new window.
+
+    Shared core for the recovery banner buttons, the ``/ccslack restore``
+    command, and startup auto-recovery. Returns the new window_id on success,
+    ``None`` on failure.
+
+    ``mode`` selects provider-correct relaunch args via ``_build_launch_args``.
+    ``announce`` posts a one-line confirmation into the channel when True.
+    """
+    extra_args = _build_launch_args(window_id, mode)
+    success, message, new_window_id = await _respawn_window(
+        window_id, extra_args=extra_args
+    )
+    if not success or not new_window_id:
+        logger.warning(
+            "restore: respawn failed for %s (%s): %s", window_id, mode, message
+        )
+        return None
+
+    old_state = window_store.window_states.get(window_id)
+    provider = old_state.provider_name if old_state else config.provider_name
+    cwd = (old_state.cwd if old_state else "") or None
+
+    thread_router.unbind_channel(channel_id)
+    window_store.remove_window(window_id)
+    thread_router.bind_channel(
+        channel_id,
+        new_window_id,
+        window_name=thread_router.get_display_name(new_window_id),
+    )
+    session_manager.set_window_provider(new_window_id, provider, cwd=cwd)
+    session_manager.set_window_origin(new_window_id, "ccslack_created")
+
+    bolt_client = BoltSlackClient(client)
+    # Lazy: status module pulls session_manager + slack helpers.
+    from .status import ensure_status_message
+
+    await ensure_status_message(
+        bolt_client, channel_id, new_window_id, initial_state="idle"
+    )
+
+    if announce:
+        label = {"fresh": "Fresh", "continue": "Continue", "resume": "Resume"}[mode]
+        with contextlib.suppress(SlackApiError):
+            await client.chat_postMessage(
+                channel=channel_id,
+                text=(
+                    f":sparkles: {label} — new tmux window `{new_window_id}` "
+                    f"(provider `{provider}`)."
+                ),
+            )
+    return new_window_id
+
+
+async def restore_dead_windows_on_start(client: SlackClient) -> None:
+    """Auto-recover dead bound windows at startup per ``config.restore_on_start``.
+
+    Called once from bootstrap after ``resolve_stale_ids``. For each bound
+    channel whose tmux window no longer exists:
+
+      * ``"off"``     — do nothing (polling will post a banner later).
+      * ``"banner"``  — do nothing here; the polling loop posts the manual
+                        recovery banner on its first tick.
+      * ``"continue"``/``"resume"`` — respawn the agent automatically.
+
+    Best-effort: failures are logged and the polling loop's banner remains the
+    backstop for anything that couldn't be auto-restored.
+    """
+    mode = config.restore_on_start
+    if mode in ("off", "banner"):
+        return
+    restore_mode: RestoreMode = "resume" if mode == "resume" else "continue"
+
+    # Snapshot — restore_window mutates channel_bindings as it rebinds.
+    bindings = list(thread_router.channel_bindings.items())
+    restored = 0
+    for channel_id, window_id in bindings:
+        live = await tmux_manager.find_window_by_id(window_id)
+        if live is not None:
+            continue  # window survived (auto-detect / external) — leave it.
+        view = session_manager.view_window(window_id)
+        if view is None or not view.cwd:
+            logger.info(
+                "restore: skipping %s (channel %s) — no remembered cwd",
+                window_id,
+                channel_id,
+            )
+            continue
+        new_window_id = await restore_window(
+            client, channel_id, window_id, mode=restore_mode, announce=True
+        )
+        if new_window_id:
+            restored += 1
+            logger.info(
+                "restore: auto-%s %s -> %s (channel %s)",
+                restore_mode,
+                window_id,
+                new_window_id,
+                channel_id,
+            )
+    if restored:
+        logger.info("restore: auto-recovered %d session(s) at startup", restored)
+
+
 def register(app: AsyncApp) -> None:
     """Wire the recovery-button action handlers."""
 
     @app.action("ccslack_recover_fresh")
     async def on_fresh(ack, body, client) -> None:  # noqa: ANN001
-        await _handle_recover(ack, body, client, extra_args="", label="Fresh")
+        await _handle_recover(ack, body, client, mode="fresh")
 
     @app.action("ccslack_recover_continue")
     async def on_continue(ack, body, client) -> None:  # noqa: ANN001
-        await _handle_recover(
-            ack, body, client, extra_args="--continue", label="Continue"
-        )
+        await _handle_recover(ack, body, client, mode="continue")
 
     @app.action("ccslack_recover_resume")
     async def on_resume(ack, body, client) -> None:  # noqa: ANN001
-        view_window_id = _extract_window_id(body, "ccslack_recover_resume")
-        view = session_manager.view_window(view_window_id) if view_window_id else None
-        session_id = (view.session_id if view else "") or ""
-        extra = f"--resume {session_id}" if session_id else ""
-        await _handle_recover(ack, body, client, extra_args=extra, label="Resume")
+        await _handle_recover(ack, body, client, mode="resume")
 
     @app.action("ccslack_recover_archive")
     async def on_archive(ack, body, client) -> None:  # noqa: ANN001
@@ -191,8 +338,7 @@ async def _handle_recover(
     body: dict[str, Any],
     client,  # noqa: ANN001 — Bolt-provided AsyncWebClient
     *,
-    extra_args: str,
-    label: str,
+    mode: RestoreMode,
 ) -> None:
     """Common implementation for Fresh / Continue / Resume buttons."""
     await ack()
@@ -206,50 +352,18 @@ async def _handle_recover(
     if not is_authorized(user_id, channel_id) or not channel_id or not window_id:
         return
 
-    success, message, new_window_id = await _respawn_window(
-        window_id, extra_args=extra_args
+    new_window_id = await restore_window(
+        client, channel_id, window_id, mode=mode, announce=True
     )
-    if not success or not new_window_id:
+    if new_window_id is None:
+        label = {"fresh": "Fresh", "continue": "Continue", "resume": "Resume"}[mode]
         with contextlib.suppress(SlackApiError):
             await client.chat_postEphemeral(
                 channel=channel_id,
                 user=user_id,
-                text=f"ccslack {label}: respawn failed — {message}",
+                text=f"ccslack {label}: respawn failed (check logs).",
             )
         return
-
-    # Rebind channel to new window, drop the old state.
-    old_state = window_store.window_states.get(window_id)
-    provider = old_state.provider_name if old_state else config.provider_name
-    cwd = (old_state.cwd if old_state else "") or None
-
-    thread_router.unbind_channel(channel_id)
-    window_store.remove_window(window_id)
-    thread_router.bind_channel(
-        channel_id,
-        new_window_id,
-        window_name=thread_router.get_display_name(new_window_id),
-    )
-    session_manager.set_window_provider(new_window_id, provider, cwd=cwd)
-    session_manager.set_window_origin(new_window_id, "ccslack_created")
-
-    # Repost a fresh status message for the new window.
-    bolt_client = BoltSlackClient(client)
-    # Lazy: status module pulls session_manager + slack helpers.
-    from .status import ensure_status_message
-
-    await ensure_status_message(
-        bolt_client, channel_id, new_window_id, initial_state="idle"
-    )
-
-    with contextlib.suppress(SlackApiError):
-        await client.chat_postMessage(
-            channel=channel_id,
-            text=(
-                f":sparkles: {label} — new tmux window `{new_window_id}` "
-                f"(provider `{provider}`)."
-            ),
-        )
 
     # Hide the recovery banner so it can't be re-clicked.
     message_ts = (body.get("message") or {}).get("ts")
@@ -288,4 +402,10 @@ def _extract_window_id(body: dict[str, Any], action_id: str) -> str:
     return ""
 
 
-__all__ = ["post_recovery_banner", "register"]
+__all__ = [
+    "RestoreMode",
+    "post_recovery_banner",
+    "register",
+    "restore_dead_windows_on_start",
+    "restore_window",
+]

@@ -153,6 +153,24 @@ class Config:
         # Provider selection
         self.provider_name: str = os.getenv("CCSLACK_PROVIDER", "claude")
 
+        # Startup recovery for sessions whose tmux window vanished (reboot,
+        # tmux server restart). On bootstrap, every bound channel whose window
+        # is dead is handled per this mode:
+        #   "banner"   (default) — post the manual Fresh/Continue/Resume/Archive
+        #                          recovery banner; user picks.
+        #   "continue" — auto-respawn the agent with its provider's continue
+        #                flag (claude --continue, codex resume --last, …).
+        #   "resume"   — auto-respawn with --resume <session_id> when a session
+        #                id is known, else fall back to continue.
+        #   "off"      — do nothing automatically; the polling loop still posts
+        #                the banner when it later notices the dead window.
+        raw_restore = os.getenv("CCSLACK_RESTORE_ON_START", "banner").strip().lower()
+        self.restore_on_start: str = (
+            raw_restore
+            if raw_restore in ("banner", "continue", "resume", "off")
+            else "banner"
+        )
+
         # Directory browser: show hidden (dot) directories
         self.show_hidden_dirs: bool = os.getenv(
             "CCSLACK_SHOW_HIDDEN_DIRS", ""

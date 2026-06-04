@@ -40,6 +40,7 @@ override env vars where applicable.
 | Variable | Default | Description |
 |---|---|---|
 | `CCSLACK_PROVIDER` | `claude` | Default provider for `/ccslack new` when no provider is specified. One of `claude` `codex` `gemini` `pi` `shell`. |
+| `CCSLACK_RESTORE_ON_START` | `banner` | What to do at startup for bound channels whose tmux window died (reboot / tmux restart). `banner` posts the manual Fresh/Continue/Resume/Archive recovery banner; `continue` auto-respawns and continues the latest session; `resume` auto-respawns with the remembered session id (falls back to continue); `off` does nothing (polling still posts the banner later). |
 | `CCSLACK_CLAUDE_COMMAND` | `claude` | Override the launch command. Useful for wrappers like `ce`, `cc-mirror`, `zai`. |
 | `CCSLACK_CODEX_COMMAND` | `codex` | … |
 | `CCSLACK_GEMINI_COMMAND` | `gemini` | … |

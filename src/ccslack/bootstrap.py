@@ -122,6 +122,26 @@ async def bootstrap_application(app: AsyncApp) -> None:
     wire_runtime_callbacks()
     await start_session_monitor(app)
     await _start_status_polling(app)
+    await _restore_dead_windows(app)
+
+
+async def _restore_dead_windows(app: AsyncApp) -> None:
+    """Auto-recover sessions whose tmux window died (reboot / tmux restart).
+
+    Gated on ``config.restore_on_start``; a no-op for ``off`` / ``banner``.
+    Runs after polling has started so the recovery banner remains the backstop
+    for anything auto-recovery skips.
+    """
+    try:
+        from .handlers.recovery import restore_dead_windows_on_start
+    except ImportError:
+        logger.debug("recovery module not present; skipping startup restore")
+        return
+    client = BoltSlackClient(app.client)
+    try:
+        await restore_dead_windows_on_start(client)
+    except Exception:  # noqa: BLE001 — never let restore break startup
+        logger.exception("startup restore failed")
 
 
 async def _start_status_polling(app: AsyncApp) -> None:

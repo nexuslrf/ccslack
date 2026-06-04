@@ -110,6 +110,7 @@ def register(app: AsyncApp) -> None:
             "mute",
             "history",
             "resume",
+            "restore",
             "panes",
             "send",
             "toolcalls",
@@ -198,6 +199,10 @@ def register(app: AsyncApp) -> None:
             await handle_panes(client, channel_id, user_id)
             return
 
+        if sub == "restore":
+            await _handle_restore(client, channel_id, user_id, args)
+            return
+
         if sub == "send":
             # Lazy: send pulls security predicates + uploader.
             from .send import handle_send
@@ -229,6 +234,8 @@ def _help_text() -> str:
         f"• `{slash} sessions` — interactive dashboard with per-session kill.\n"
         f"• `{slash} history [N]` — last N transcript messages in this channel.\n"
         f"• `{slash} resume` — pick a past Claude session in this channel's cwd.\n"
+        f"• `{slash} restore [continue|resume|fresh]` — respawn a dead session "
+        "(after reboot / tmux restart).\n"
         f"• `{slash} panes` — list all tmux panes for this session.\n"
         f"• `{slash} send <path>` — upload a file from the session's cwd.\n"
         f"• `{slash} toolcalls [shown|hidden|default]` — show/hide tool_use & "
@@ -547,6 +554,87 @@ _MUTE_ALIASES = {
     "muted": "muted",
     "mute": "muted",
 }
+
+
+_RESTORE_ALIASES = {
+    "continue": "continue",
+    "cont": "continue",
+    "c": "continue",
+    "resume": "resume",
+    "r": "resume",
+    "fresh": "fresh",
+    "new": "fresh",
+    "f": "fresh",
+}
+
+
+async def _handle_restore(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    args: list[str],
+) -> None:
+    """``/ccslack restore [continue|resume|fresh]`` — respawn this channel's agent.
+
+    Useful after a reboot / tmux restart: rebuilds the dead tmux window and
+    relaunches the agent. Default mode is ``continue`` (picks up the most
+    recent session for the provider); ``resume`` uses the remembered session
+    id; ``fresh`` starts a clean session.
+    """
+    window_id = thread_router.get_window_for_channel(channel_id)
+    if window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `restore` only works inside a bound session channel.",
+        )
+        return
+
+    mode = "continue"
+    if args:
+        resolved = _RESTORE_ALIASES.get(args[0].lower())
+        if resolved is None:
+            await _post_ephemeral(
+                client.chat_postEphemeral,
+                channel=channel_id,
+                user=user_id,
+                text=(
+                    f"ccslack: unknown restore mode `{args[0]}` — "
+                    "pick `continue`, `resume`, or `fresh`."
+                ),
+            )
+            return
+        mode = resolved
+
+    # If the window is actually still alive, restoring would needlessly kill it.
+    live = await tmux_manager.find_window_by_id(window_id)
+    if live is not None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: window `{window_id}` is still alive — restore is for "
+                "dead sessions (after reboot / tmux restart). Use `/ccslack kill` "
+                "first if you want to start over."
+            ),
+        )
+        return
+
+    # Lazy: recovery pulls provider + status helpers.
+    from .recovery import restore_window
+
+    new_window_id = await restore_window(
+        client, channel_id, window_id, mode=mode, announce=True
+    )
+    if new_window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack restore ({mode}): respawn failed (check logs).",
+        )
 
 
 async def _handle_mute(

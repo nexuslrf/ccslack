@@ -85,6 +85,26 @@ rebinds the channel.
 - **Limitation**: Claude only. Codex/Gemini/Pi have their own resume
   flows; tell us if you want them ported.
 
+### `/ccslack restore [continue|resume|fresh]`
+
+Recovers a session whose tmux window died — typically after a host
+**reboot** or `tmux kill-server`. Rebuilds the tmux window and relaunches
+the agent, then rebinds the channel to the new window.
+
+| Mode | Behaviour |
+|---|---|
+| `continue` (default) | Relaunch and continue the latest session (`claude --continue`, `codex resume --last`, …). |
+| `resume` | Relaunch with the remembered session id (`claude --resume <id>`, `codex resume <id>`); falls back to `continue` when no id is known. |
+| `fresh` | Relaunch a clean session. |
+
+Refuses if the window is still alive (use `/ccslack kill` first if you
+want a clean start). For unattended recovery on every reboot, set
+`CCSLACK_RESTORE_ON_START=continue` (or `resume`) instead — see
+[configuration](configuration.md).
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
 ### `/ccslack panes`
 
 Ephemeral list of every tmux pane in the bound window: active marker,
