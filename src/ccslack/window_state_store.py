@@ -38,6 +38,11 @@ NOTIFICATION_MODES: tuple[str, ...] = ("all", "errors_only", "muted")
 TOOL_CALL_VISIBILITY_MODES: tuple[str, ...] = ("default", "shown", "hidden")
 DEFAULT_TOOL_CALL_VISIBILITY: str = "default"
 
+# Per-window override for grouping tool chains into a Slack thread.
+# "default" defers to config.thread_tool_calls; "on"/"off" force it.
+THREAD_TOOL_CALLS_MODES: tuple[str, ...] = ("default", "on", "off")
+DEFAULT_THREAD_TOOL_CALLS: str = "default"
+
 WINDOW_ORIGINS: frozenset[str] = frozenset(
     {"manual_discovered", "ccslack_created", "external"}
 )
@@ -147,6 +152,7 @@ class WindowState:
     approval_mode: str = DEFAULT_APPROVAL_MODE
     batch_mode: str = DEFAULT_BATCH_MODE
     tool_call_visibility: str = DEFAULT_TOOL_CALL_VISIBILITY
+    thread_tool_calls: str = DEFAULT_THREAD_TOOL_CALLS
     external: bool = False
     origin: str = DEFAULT_WINDOW_ORIGIN
     panes: dict[str, PaneInfo] = field(default_factory=dict)
@@ -187,6 +193,8 @@ class WindowState:
             d["batch_mode"] = self.batch_mode
         if self.tool_call_visibility != DEFAULT_TOOL_CALL_VISIBILITY:
             d["tool_call_visibility"] = self.tool_call_visibility
+        if self.thread_tool_calls != DEFAULT_THREAD_TOOL_CALLS:
+            d["thread_tool_calls"] = self.thread_tool_calls
         if self.external:
             d["external"] = True
         if self.origin != DEFAULT_WINDOW_ORIGIN:
@@ -231,6 +239,7 @@ class WindowState:
             tool_call_visibility=data.get(
                 "tool_call_visibility", DEFAULT_TOOL_CALL_VISIBILITY
             ),
+            thread_tool_calls=data.get("thread_tool_calls", DEFAULT_THREAD_TOOL_CALLS),
             external=data.get("external", False),
             origin=(
                 data.get("origin", DEFAULT_WINDOW_ORIGIN)
@@ -601,6 +610,35 @@ class WindowStateStore:
         idx = modes.index(current) if current in modes else 0
         new_mode = modes[(idx + 1) % len(modes)]
         self.set_tool_call_visibility(window_id, new_mode)
+        return new_mode
+
+    # ------------------------------------------------------------------
+    # Tool-call threading
+    # ------------------------------------------------------------------
+
+    _THREAD_TOOL_CALLS_MODES = THREAD_TOOL_CALLS_MODES
+
+    def get_thread_tool_calls(self, window_id: str) -> str:
+        """Get tool-call threading mode for a window (default: 'default')."""
+        state = self.window_states.get(window_id)
+        return state.thread_tool_calls if state else DEFAULT_THREAD_TOOL_CALLS
+
+    def set_thread_tool_calls(self, window_id: str, mode: str) -> None:
+        """Set tool-call threading mode for a window."""
+        if mode not in self._THREAD_TOOL_CALLS_MODES:
+            raise ValueError(f"Invalid thread_tool_calls: {mode!r}")
+        state = self.get_window_state(window_id)
+        if state.thread_tool_calls != mode:
+            state.thread_tool_calls = mode
+            self._schedule_save()
+
+    def cycle_thread_tool_calls(self, window_id: str) -> str:
+        """Cycle threading mode: default → on → off → default. Returns new mode."""
+        current = self.get_thread_tool_calls(window_id)
+        modes = self._THREAD_TOOL_CALLS_MODES
+        idx = modes.index(current) if current in modes else 0
+        new_mode = modes[(idx + 1) % len(modes)]
+        self.set_thread_tool_calls(window_id, new_mode)
         return new_mode
 
     # ------------------------------------------------------------------

@@ -300,6 +300,11 @@ def register(app) -> None:  # noqa: ANN001
         # Drop the WindowState entirely — archive is destructive intent.
         window_store.remove_window(window_id)
 
+        # Drop any open tool-call thread state for the channel.
+        from .messaging_pipeline.turn_threads import clear_channel
+
+        clear_channel(channel_id)
+
         # Best-effort: archive the channel.
         try:
             await client.conversations_archive(channel=channel_id)

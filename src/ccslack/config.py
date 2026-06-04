@@ -205,6 +205,14 @@ class Config:
             "CCSLACK_HIDE_TOOL_CALLS", "false"
         ).lower() in ("1", "true", "yes")
 
+        # Group an agent turn's tool_use / tool_result / thinking under one
+        # threaded parent message in the main channel, so long tool chains
+        # don't flood the channel. Plain answers + interactive prompts stay in
+        # the main channel. Per-window override via /ccslack thread.
+        self.thread_tool_calls: bool = os.getenv(
+            "CCSLACK_THREAD_TOOL_CALLS", "true"
+        ).lower() in ("1", "true", "yes")
+
         # Status display: green=active (system POV) or green=ready (user POV).
         raw_status_mode = os.getenv("CCSLACK_STATUS_MODE", "").strip().lower()
         self.status_mode: str = (

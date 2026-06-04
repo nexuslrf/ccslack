@@ -525,5 +525,14 @@ class SessionManager:
     def cycle_tool_call_visibility(self, window_id: str) -> str:
         return window_store.cycle_tool_call_visibility(window_id)
 
+    def get_thread_tool_calls(self, window_id: str) -> str:
+        return window_store.get_thread_tool_calls(window_id)
+
+    def set_thread_tool_calls(self, window_id: str, mode: str) -> None:
+        window_store.set_thread_tool_calls(window_id, mode)
+
+    def cycle_thread_tool_calls(self, window_id: str) -> str:
+        return window_store.cycle_thread_tool_calls(window_id)
+
 
 session_manager = SessionManager()

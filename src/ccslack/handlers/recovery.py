@@ -383,9 +383,11 @@ async def _archive(
     thread_router.unbind_channel(channel_id)
     window_store.remove_window(window_id)
     # Lazy: polling helper for cleanup.
+    from .messaging_pipeline.turn_threads import clear_channel
     from .polling.coordinator import forget_window
 
     forget_window(window_id)
+    clear_channel(channel_id)
     message_ts = (body.get("message") or {}).get("ts")
     if message_ts:
         with contextlib.suppress(SlackApiError):

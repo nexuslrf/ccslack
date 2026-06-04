@@ -161,6 +161,25 @@ No arg cycles. Default global is `shown` (matches ccgram).
 - **Where**: a bound session channel.
 - **Auth**: channel membership.
 
+### `/ccslack thread [on|off|default]`
+
+Per-channel grouping of a turn's tool chain into a Slack thread.
+
+| Mode | Effect |
+|---|---|
+| `on` | A turn's `tool_use` / `tool_result` / `thinking` are posted under one threaded parent in the main channel; plain answers + interactive prompts stay in the main channel. |
+| `off` | Tool calls post flat in the channel (no thread). |
+| `default` | Defer to the global `CCSLACK_THREAD_TOOL_CALLS` env var (default `true`). |
+
+No arg cycles. The thread parent shows `🛠️ Tool activity — running…` while
+the turn is in progress and is rewritten to `🛠️ N tool calls · done` when the
+turn ends (agent Stop hook, or the agent's final answer, or the next user
+message). Tool-use → tool-result pairing still edits the original message in
+place — inside the thread.
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
 ### `/ccslack kill [target | --all --confirm]`
 
 Tear down sessions.
@@ -283,7 +302,7 @@ invoke that form by hand.
 | Dashboard 🗑️ Kill button | `ALLOWED_USERS` |
 | `/ccslack kill --all`, kill by `<#channel>` / `C…` / `@N` | `ALLOWED_USERS` |
 | `/ccslack kill` (from session channel) | Channel membership |
-| `/ccslack mute`, `history`, `resume`, `panes`, `send`, `toolcalls` | Channel membership |
+| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `toolcalls`, `thread` | Channel membership |
 | Inbound message → tmux | Channel membership |
 | Status-message buttons (Screenshot, Toolbar, Archive) | Channel membership |
 | Live picker buttons | Channel membership |

@@ -114,6 +114,7 @@ def register(app: AsyncApp) -> None:
             "panes",
             "send",
             "toolcalls",
+            "thread",
             "help",
             "?",
             "-h",
@@ -215,6 +216,10 @@ def register(app: AsyncApp) -> None:
             await _handle_toolcalls(client, channel_id, user_id, args)
             return
 
+        if sub == "thread":
+            await _handle_thread(client, channel_id, user_id, args)
+            return
+
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
@@ -240,6 +245,8 @@ def _help_text() -> str:
         f"• `{slash} send <path>` — upload a file from the session's cwd.\n"
         f"• `{slash} toolcalls [shown|hidden|default]` — show/hide tool_use & "
         "tool_result for this channel.\n"
+        f"• `{slash} thread [on|off|default]` — group tool chains under a "
+        "thread parent (vs flat).\n"
         f"• `{slash} kill` — kill the session for THIS channel.\n"
         f"• `{slash} kill <#channel|@window>` — kill a specific session "
         "(meta channel only).\n"
@@ -741,6 +748,11 @@ async def _kill_one(client, channel_id: str, window_id: str) -> str:  # noqa: AN
     except ImportError:
         pass
 
+    # Drop any open tool-call thread state for the channel.
+    from .messaging_pipeline.turn_threads import clear_channel
+
+    clear_channel(channel_id)
+
     try:
         await bolt_client.conversations_archive(channel=channel_id)
     except SlackApiError as exc:
@@ -903,6 +915,67 @@ async def _handle_toolcalls(
         channel=channel_id,
         user=user_id,
         text=f"ccslack: tool-call visibility → {labels.get(mode, mode)}",
+    )
+
+
+_THREAD_ALIASES = {
+    "on": "on",
+    "yes": "on",
+    "off": "off",
+    "no": "off",
+    "flat": "off",
+    "default": "default",
+    "auto": "default",
+}
+
+
+async def _handle_thread(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    args: list[str],
+) -> None:
+    """``/ccslack thread [on|off|default]`` — group tool chains into a thread."""
+    window_id = thread_router.get_window_for_channel(channel_id)
+    if window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `thread` only works inside a bound session channel.",
+        )
+        return
+
+    if args:
+        alias = args[0].lower()
+        mode = _THREAD_ALIASES.get(alias)
+        if mode is None:
+            await _post_ephemeral(
+                client.chat_postEphemeral,
+                channel=channel_id,
+                user=user_id,
+                text=(
+                    f"ccslack: unknown mode `{alias}` — pick `on`, `off`, or `default`."
+                ),
+            )
+            return
+        session_manager.set_thread_tool_calls(window_id, mode)
+    else:
+        mode = session_manager.cycle_thread_tool_calls(window_id)
+
+    labels = {
+        "on": ":thread: *on* — tool chains grouped under a thread parent",
+        "off": ":heavy_minus_sign: *off* — tool calls post flat in the channel",
+        "default": (
+            ":gear: *default* — follows global "
+            f"`CCSLACK_THREAD_TOOL_CALLS` (currently `{config.thread_tool_calls}`)"
+        ),
+    }
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=f"ccslack: tool-call threading → {labels.get(mode, mode)}",
     )
 
 

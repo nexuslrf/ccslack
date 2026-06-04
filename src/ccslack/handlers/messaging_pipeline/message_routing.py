@@ -94,80 +94,111 @@ async def handle_new_message(msg: NewMessage, client: SlackClient) -> None:
         logger.debug("No Slack channels bound to session %s", msg.session_id)
         return
 
-    # Lazy: status / polling modules pull session_manager + slack helpers.
-    from ..polling.coordinator import mark_active
-    from ..status import update_status
+    for channel_id, window_id in channels:
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(
+            window_id=window_id, channel_id=channel_id, session_id=msg.session_id
+        )
+        await _route_to_channel(client, channel_id, window_id, msg, text)
 
-    # Lazy: interactive subsystem pulls slack_sender + tmux. Imported here so
-    # tests that bypass message_routing don't pay the cost.
+
+async def _route_to_channel(
+    client: SlackClient,
+    channel_id: str,
+    window_id: str,
+    msg: NewMessage,
+    text: str,
+) -> None:
+    """Deliver one message to one bound channel, applying all routing policy."""
+    # Lazy: status / polling modules pull session_manager + slack helpers.
     from ..interactive import (
         INTERACTIVE_TOOL_NAMES,
         enter_interactive_mode,
         maybe_exit_for_tool_result,
     )
+    from ..polling.coordinator import mark_active
+    from ..status import update_status
+    from . import turn_threads
 
-    for channel_id, window_id in channels:
-        mark_active(window_id)
-        structlog.contextvars.clear_contextvars()
-        structlog.contextvars.bind_contextvars(
-            window_id=window_id, channel_id=channel_id, session_id=msg.session_id
+    mark_active(window_id)
+
+    # A fresh user message closes the previous turn's tool thread (if any)
+    # so the new exchange starts with a clean parent.
+    if msg.role == "user":
+        await turn_threads.note_user_message(client, channel_id)
+
+    # tool_use of an interactive tool name → enter the live picker. Skip the
+    # normal post; the picker carries the pane content live.
+    if (
+        msg.content_type == "tool_use"
+        and (msg.tool_name or "") in INTERACTIVE_TOOL_NAMES
+    ):
+        await enter_interactive_mode(
+            client,
+            channel_id=channel_id,
+            window_id=window_id,
+            tool_use_id=msg.tool_use_id,
+            tool_name=msg.tool_name or "",
+        )
+        await update_status(client, channel_id, window_id, "active")
+        return
+
+    # tool_result paired with an active interactive picker → close picker and
+    # skip the normal post (the picker now shows the final state).
+    if (
+        msg.content_type == "tool_result"
+        and msg.tool_use_id
+        and await maybe_exit_for_tool_result(client, msg.tool_use_id)
+    ):
+        await update_status(client, channel_id, window_id, "active")
+        return
+
+    # Per-window tool-call visibility — each channel can mute/show its tool
+    # chain via ``/ccslack toolcalls``.
+    if msg.content_type in (
+        "tool_use",
+        "tool_result",
+    ) and window_query.is_tool_calls_hidden(window_id):
+        logger.debug("Tool calls hidden for window %s; skipping", window_id)
+        await update_status(client, channel_id, window_id, "active")
+        return
+
+    notification_mode = window_query.get_notification_mode(window_id)
+    if _should_skip_for_mode(notification_mode, text, msg):
+        logger.debug(
+            "Suppressing message for window %s (mode=%s)",
+            window_id,
+            notification_mode,
+        )
+        await update_status(client, channel_id, window_id, "active")
+        return
+
+    # Tool-call threading: route tool_use / tool_result / thinking under a
+    # per-turn thread parent in the main channel. Plain text answers stay in
+    # the main channel (thread_ts None); the parent is created lazily on the
+    # first threadable message of the turn.
+    thread_ts: str | None = None
+    if (
+        msg.role != "user"
+        and msg.content_type in ("tool_use", "tool_result", "thinking")
+        and window_query.is_tool_threading_enabled(window_id)
+    ):
+        thread_ts = await turn_threads.thread_parent_for(
+            client, channel_id, is_tool=msg.content_type == "tool_use"
         )
 
-        # tool_use of an interactive tool name → enter the live picker. Skip
-        # the normal post; the picker carries the pane content live.
-        if (
-            msg.content_type == "tool_use"
-            and (msg.tool_name or "") in INTERACTIVE_TOOL_NAMES
-        ):
-            await enter_interactive_mode(
-                client,
-                channel_id=channel_id,
-                window_id=window_id,
-                tool_use_id=msg.tool_use_id,
-                tool_name=msg.tool_name or "",
-            )
-            await update_status(client, channel_id, window_id, "active")
-            continue
+    decorated = _decorate(msg, text)
+    await _post_or_pair(client, channel_id, msg, decorated, thread_ts=thread_ts)
 
-        # tool_result paired with an active interactive picker → close picker
-        # and skip the normal post (the picker now shows the final state).
-        if (
-            msg.content_type == "tool_result"
-            and msg.tool_use_id
-            and await maybe_exit_for_tool_result(client, msg.tool_use_id)
-        ):
-            await update_status(client, channel_id, window_id, "active")
-            continue
+    # No-hooks turn-end signal: the agent's final answer closes the thread.
+    # The Stop hook also calls end_turn (idempotent), so this is just a
+    # backstop for providers / setups without hooks.
+    if msg.content_type == "text" and msg.phase == "final_answer":
+        await turn_threads.end_turn(client, channel_id)
 
-        # Per-window tool-call visibility — moved inside the loop so each
-        # channel can independently mute/show its tool chain via
-        # ``/ccslack toolcalls``.
-        if msg.content_type in (
-            "tool_use",
-            "tool_result",
-        ) and window_query.is_tool_calls_hidden(window_id):
-            logger.debug(
-                "Tool calls hidden for window %s; skipping", window_id
-            )
-            await update_status(client, channel_id, window_id, "active")
-            continue
-
-        notification_mode = window_query.get_notification_mode(window_id)
-        if _should_skip_for_mode(notification_mode, text, msg):
-            logger.debug(
-                "Suppressing message for window %s (mode=%s)",
-                window_id,
-                notification_mode,
-            )
-            await update_status(client, channel_id, window_id, "active")
-            continue
-
-        decorated = _decorate(msg, text)
-        await _post_or_pair(client, channel_id, msg, decorated)
-
-        # Flip status to "active" whenever the agent is producing output. The
-        # Stop hook flips it to "done"; idle is the resting state between turns.
-        await update_status(client, channel_id, window_id, "active")
+    # Flip status to "active" whenever the agent is producing output. The Stop
+    # hook flips it to "done"; idle is the resting state between turns.
+    await update_status(client, channel_id, window_id, "active")
 
 
 def _decorate(msg: NewMessage, text: str) -> str:
@@ -197,14 +228,20 @@ async def _post_or_pair(
     channel_id: str,
     msg: NewMessage,
     decorated: str,
+    *,
+    thread_ts: str | None = None,
 ) -> None:
     """Post a transcript chunk OR pair it with a prior tool_use.
+
+    ``thread_ts`` (when set) lands the message inside a Slack thread — used by
+    the tool-call threading feature to group a turn's chain under one parent.
 
     Pairing rules:
 
       * ``tool_use``    — post, record (channel, ts, text) under
         ``_TOOL_USE_MEMO[session_id][tool_use_id]`` so the eventual result can
-        rewrite the same message in place.
+        rewrite the same message in place. ``chat.update`` targets the message
+        ts directly, so it works whether or not the message is threaded.
       * ``tool_result`` — if we have a matching memo, ``chat.update`` the
         original tool_use message to include the result inline. Otherwise post
         as a standalone message (the tool_use may have streamed during a bot
@@ -212,7 +249,9 @@ async def _post_or_pair(
       * Everything else — straight post.
     """
     if msg.content_type == "tool_use" and msg.tool_use_id:
-        ts = await safe_post(client, channel=channel_id, text=decorated)
+        ts = await safe_post(
+            client, channel=channel_id, text=decorated, thread_ts=thread_ts
+        )
         if ts is not None:
             _TOOL_USE_MEMO.setdefault(msg.session_id, {})[msg.tool_use_id] = (
                 channel_id,
@@ -235,7 +274,7 @@ async def _post_or_pair(
                     return
         # No memo or chat.update failed — fall through to fresh post.
 
-    await safe_post(client, channel=channel_id, text=decorated)
+    await safe_post(client, channel=channel_id, text=decorated, thread_ts=thread_ts)
 
 
 __all__ = ["handle_new_message"]

@@ -82,9 +82,13 @@ async def _on_stop(
     """
     # Lazy: status / interactive modules pull session_manager + slack helpers.
     from .interactive import exit_for_window
+    from .messaging_pipeline.turn_threads import end_turn
     from .status import update_status
 
     await exit_for_window(client, window_id, reason="agent stop")
+
+    # Close the turn's tool-call thread and rewrite its parent into a summary.
+    await end_turn(client, channel_id)
 
     detail: str | None = None
     if failed:

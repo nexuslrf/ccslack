@@ -21,7 +21,9 @@ from .window_state_store import (
     BATCH_MODES,
     DEFAULT_APPROVAL_MODE,
     DEFAULT_BATCH_MODE,
+    DEFAULT_THREAD_TOOL_CALLS,
     DEFAULT_TOOL_CALL_VISIBILITY,
+    THREAD_TOOL_CALLS_MODES,
     TOOL_CALL_VISIBILITY_MODES,
     window_store,
 )
@@ -97,6 +99,27 @@ def is_tool_calls_hidden(window_id: str) -> bool:
     # visibility == "default" — fall through to global config
 
     return config.hide_tool_calls
+
+
+def get_thread_tool_calls(window_id: str) -> str:
+    """Get raw per-window threading mode (default/on/off)."""
+    state = window_store.window_states.get(window_id)
+    mode = state.thread_tool_calls if state else DEFAULT_THREAD_TOOL_CALLS
+    return mode if mode in THREAD_TOOL_CALLS_MODES else DEFAULT_THREAD_TOOL_CALLS
+
+
+def is_tool_threading_enabled(window_id: str) -> bool:
+    """Resolved boolean: should tool chains be grouped into a Slack thread?
+
+    Per-window ``on``/``off`` wins; ``default`` falls through to the global
+    ``config.thread_tool_calls`` setting.
+    """
+    mode = get_thread_tool_calls(window_id)
+    if mode == "on":
+        return True
+    if mode == "off":
+        return False
+    return config.thread_tool_calls
 
 
 def get_session_id_for_window(window_id: str) -> str | None:
