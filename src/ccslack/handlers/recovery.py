@@ -220,7 +220,11 @@ def _build_banner_blocks(window_id: str) -> tuple[list[dict[str, Any]], str]:
 async def post_recovery_banner(
     client: SlackClient, channel_id: str, window_id: str
 ) -> str | None:
-    """Post the dead-window banner. Returns the new message ts (or None)."""
+    """Post the dead-window banner. Returns the new message ts (or None).
+
+    When the channel itself is gone (deleted / archived), the binding is pruned
+    so the poll loop stops retrying — see ``polling.coordinator.prune_channel``.
+    """
     blocks, fallback = _build_banner_blocks(window_id)
     try:
         result = await client.chat_postMessage(
@@ -228,10 +232,14 @@ async def post_recovery_banner(
         )
         return result.get("ts") if hasattr(result, "get") else result["ts"]
     except SlackApiError as exc:
-        logger.warning(
-            "recovery banner post failed: %s",
-            exc.response.get("error") if exc.response else exc,
-        )
+        error = exc.response.get("error") if exc.response else str(exc)
+        # Lazy: coordinator import at the error path only.
+        from .polling.coordinator import is_channel_gone, prune_channel
+
+        if is_channel_gone(error):
+            prune_channel(channel_id, window_id)
+            return None
+        logger.warning("recovery banner post failed: %s", error)
         return None
 
 

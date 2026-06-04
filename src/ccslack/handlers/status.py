@@ -42,6 +42,23 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
+
+def _prune_if_channel_gone(channel_id: str, window_id: str, error: str) -> bool:
+    """Prune the binding when a post failed because the channel is gone.
+
+    Returns True when the channel was pruned (caller should stop). A deleted /
+    archived Slack channel would otherwise make the poll loop retry — and log
+    ``channel_not_found`` — every tick forever.
+    """
+    # Lazy: coordinator pulls router/store; import at the error path only.
+    from .polling.coordinator import is_channel_gone, prune_channel
+
+    if not is_channel_gone(error):
+        return False
+    prune_channel(channel_id, window_id)
+    return True
+
+
 # Per-channel debounce for status updates. Slack tier-3 limits are 1/sec per
 # channel; we keep a 0.8s minimum gap so the queue never starves the rest of
 # the channel's traffic.
@@ -172,10 +189,10 @@ async def ensure_status_message(
         )
         ts = result.get("ts") if hasattr(result, "get") else result["ts"]
     except SlackApiError as exc:
-        logger.warning(
-            "ensure_status_message: chat.postMessage failed: %s",
-            exc.response.get("error") if exc.response else exc,
-        )
+        error = exc.response.get("error") if exc.response else str(exc)
+        if _prune_if_channel_gone(channel_id, window_id, error):
+            return None
+        logger.warning("ensure_status_message: chat.postMessage failed: %s", error)
         return None
 
     state.status_message_ts = ts
@@ -239,6 +256,8 @@ async def update_status(
             # User deleted it. Forget the ts so the next call re-posts.
             state.status_message_ts = ""
             session_manager._save_state()
+            return False
+        if _prune_if_channel_gone(channel_id, window_id, error):
             return False
         logger.warning("chat.update for status message failed: %s", error)
         return False

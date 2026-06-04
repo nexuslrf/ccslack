@@ -69,6 +69,47 @@ def forget_window(window_id: str) -> None:
     _clear_shell(window_id)
 
 
+# Slack errors that mean the channel is gone for good — stop trying to post.
+CHANNEL_GONE_ERRORS = frozenset({"channel_not_found", "is_archived"})
+
+
+def is_channel_gone(error: str | None) -> bool:
+    """True when a Slack error code means the channel no longer exists."""
+    return bool(error) and error in CHANNEL_GONE_ERRORS
+
+
+def prune_channel(channel_id: str, window_id: str | None = None) -> None:
+    """Drop a channel binding + its window state when the channel is gone.
+
+    Called when a post fails with ``channel_not_found`` / ``is_archived`` —
+    the Slack channel was deleted or archived out from under us, so there's
+    nothing to recover. Removing the binding stops the poll loop from
+    retrying (and spamming the log) every tick. Idempotent.
+    """
+    # Lazy: avoid pulling session/router at module import for this cold path.
+    from ...thread_router import thread_router
+    from ...window_state_store import window_store
+
+    wid = window_id or thread_router.get_window_for_channel(channel_id)
+    unbound = thread_router.unbind_channel(channel_id)
+    if wid is None:
+        wid = unbound
+    if wid:
+        with contextlib.suppress(KeyError):
+            window_store.remove_window(wid)
+        forget_window(wid)
+    # Drop any open tool-call thread state for the channel.
+    try:
+        from ..messaging_pipeline.turn_threads import clear_channel
+    except ImportError:
+        pass
+    else:
+        clear_channel(channel_id)
+    logger.info(
+        "Pruned gone channel %s (window %s) — binding removed", channel_id, wid
+    )
+
+
 def start_status_polling(client: SlackClient) -> asyncio.Task[None]:
     """Spawn the background polling task. Returns the asyncio task handle."""
     global _poll_task
@@ -183,9 +224,12 @@ async def _handle_dead(
 
 
 __all__ = [
+    "CHANNEL_GONE_ERRORS",
     "IDLE_DECAY_SECONDS",
     "forget_window",
+    "is_channel_gone",
     "mark_active",
+    "prune_channel",
     "start_status_polling",
     "stop_status_polling",
 ]
