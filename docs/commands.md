@@ -145,7 +145,13 @@ For glob / substring: the cwd is walked (depth-capped by
 pruned, capped at `CCSLACK_SEND_MAX_RESULTS`). **One** match uploads
 immediately; **multiple** matches post an ephemeral picker — one button per
 file (🖼️ for images, 📄 otherwise), plus an **Upload all N** button when the
-count is ≤10.
+count is ≤10. An **exact path you name** (e.g. `build/out.bin`) is always
+honoured even under a pruned dir — pruning only limits *search*.
+
+**Large-file confirm**: files **≥ 10 MB** prompt a `:inbox_tray: Upload (X MB)`
+/ `Cancel` button instead of uploading immediately; smaller files upload
+straight away. (Bulk **Upload all** skips the per-file confirm — it's an
+explicit opt-in.)
 
 Security filters (all enforced on every upload — direct, picked, or bulk;
 deny-by-default):
@@ -154,8 +160,13 @@ deny-by-default):
 - Hidden files / directories (`.`-prefixed) denied
 - Secret-name patterns (`*.pem`, `*.key`, `*.env`, `*credential*`,
   `*secret*`, …)
-- `.gitignore` and `.gitleaks.toml` rules
-- 50 MB Slack file cap
+- `.gitleaks.toml` rules
+- 50 MB Slack file cap (hard limit)
+
+> **Gitignored files are allowed.** Build artifacts, logs, datasets, and
+> model checkpoints are routinely gitignored yet legitimately worth sending.
+> Secrets remain blocked by the hidden-file, secret-pattern, and gitleaks
+> checks — those don't depend on a file being tracked by git.
 
 - **Where**: a bound session channel.
 - **Auth**: channel membership (the picker buttons re-check on click).

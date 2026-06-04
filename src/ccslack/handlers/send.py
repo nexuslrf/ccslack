@@ -9,10 +9,15 @@ Three modes in one command (ported from ccgram's ``/send``):
 For glob / substring the cwd is walked (depth-capped, excluded dirs pruned).
 A single match uploads immediately; multiple matches post an ephemeral picker
 (one button per file, plus an "Upload all" button when the count is small).
+Files at or above ``_CONFIRM_THRESHOLD_BYTES`` (10 MB) prompt a confirm button
+before uploading.
 
 Security: every upload — direct, picked, or bulk — passes the full
 ``send_security.validate_sendable`` stack (path containment, hidden files,
-secret patterns, gitignored, gitleaks rules, 50 MB Slack cap).
+secret patterns, gitleaks rules, 50 MB Slack cap). Gitignored files are
+*allowed* (build artifacts, logs, datasets are commonly gitignored yet worth
+sending; secrets are still caught by the hidden-file / secret-pattern /
+gitleaks checks).
 """
 
 from __future__ import annotations
@@ -44,6 +49,9 @@ _UPLOAD_ALL_LIMIT = 10
 _MAX_PICKER_BUTTONS = 23
 # Max chars of a relative path shown on a picker button before truncation.
 _LABEL_MAX = 72
+# Files at or above this size prompt a confirm button before uploading; smaller
+# files upload straight away. (The hard 50 MB cap is enforced in send_security.)
+_CONFIRM_THRESHOLD_BYTES = 10 * 1024 * 1024
 
 _IMAGE_SUFFIXES = frozenset(
     {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".tiff", ".heic"}
@@ -161,9 +169,16 @@ async def handle_send(
         )
         return
 
-    # Absolute path → validate + upload directly (containment enforced).
+    # An exact, existing file path (absolute, or relative to cwd) is uploaded
+    # directly — even when it lives under a normally-pruned dir like build/ or
+    # dist/. The user named it explicitly; excluded-dir pruning is only meant
+    # to keep glob/substring *search* from descending into those trees.
+    # Security (containment, secrets, size) is still enforced in _upload_one.
+    is_pattern = "*" in raw_path or "?" in raw_path
     candidate = Path(raw_path).expanduser()
-    if candidate.is_absolute():
+    if not candidate.is_absolute():
+        candidate = cwd / candidate
+    if not is_pattern and candidate.is_file():
         await _upload_one(client, channel_id, user_id, candidate, cwd)
         return
 
@@ -183,14 +198,28 @@ async def handle_send(
     await _post_picker(client, channel_id, user_id, matches, cwd)
 
 
+def _human_size(num_bytes: int) -> str:
+    mb = num_bytes / (1024 * 1024)
+    if mb >= 1:
+        return f"{mb:.1f} MB"
+    return f"{num_bytes / 1024:.0f} KB"
+
+
 async def _upload_one(
     client,  # noqa: ANN001
     channel_id: str,
     user_id: str,
     resolved: Path,
     cwd: Path,
+    *,
+    confirmed: bool = False,
 ) -> bool:
-    """Validate + upload a single file. Returns success."""
+    """Validate + upload a single file. Returns success.
+
+    For files at or above ``_CONFIRM_THRESHOLD_BYTES`` and not yet
+    ``confirmed``, posts an ephemeral confirm button instead of uploading and
+    returns False (the click re-enters here with ``confirmed=True``).
+    """
     try:
         resolved = resolved.resolve()
     except OSError as exc:
@@ -205,6 +234,11 @@ async def _upload_one(
     reason = validate_sendable(resolved, cwd)
     if reason:
         await _ephemeral(client, channel_id, user_id, f"ccslack: refused — {reason}")
+        return False
+
+    size = resolved.stat().st_size
+    if not confirmed and size >= _CONFIRM_THRESHOLD_BYTES:
+        await _post_size_confirm(client, channel_id, user_id, resolved, cwd, size)
         return False
 
     rel = _safe_relative(resolved, cwd)
@@ -300,6 +334,58 @@ async def _post_picker(
     )
 
 
+async def _post_size_confirm(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    resolved: Path,
+    cwd: Path,
+    size: int,
+) -> None:
+    """Ephemeral confirm for a large file: ``Upload (X MB)`` / Cancel."""
+    rel = _safe_relative(resolved, cwd)
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f":warning: `{rel}` is *{_human_size(size)}* — larger than "
+                    f"{_CONFIRM_THRESHOLD_BYTES // (1024 * 1024)} MB. Upload it?"
+                ),
+            },
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": f"ccslack_send_confirm:{resolved}",
+                    "style": "primary",
+                    "text": {
+                        "type": "plain_text",
+                        "text": f":inbox_tray: Upload ({_human_size(size)})",
+                    },
+                    "value": str(resolved),
+                },
+                {
+                    "type": "button",
+                    "action_id": "ccslack_send_cancel",
+                    "text": {"type": "plain_text", "text": ":x: Cancel"},
+                    "value": "cancel",
+                },
+            ],
+        },
+    ]
+    await _ephemeral(
+        client,
+        channel_id,
+        user_id,
+        f"Confirm upload of {rel} ({_human_size(size)})",
+        blocks=blocks,
+    )
+
+
 def register(app: AsyncApp) -> None:
     """Wire the send picker action handlers."""
     import re as _re
@@ -313,6 +399,16 @@ def register(app: AsyncApp) -> None:
     async def on_all(ack, body, client) -> None:  # noqa: ANN001
         await ack()
         await _dispatch_all(body, client)
+
+    @app.action(_re.compile(r"^ccslack_send_confirm:.+$"))
+    async def on_confirm(ack, body, client) -> None:  # noqa: ANN001
+        await ack()
+        await _dispatch_confirm(body, client)
+
+    @app.action("ccslack_send_cancel")
+    async def on_cancel(ack, _body, _client) -> None:  # noqa: ANN001
+        # Just acknowledge; the ephemeral confirm vanishes for the clicker.
+        await ack()
 
 
 def _action_ctx(body: dict[str, Any]) -> tuple[str, str, Path | None]:
@@ -340,6 +436,17 @@ async def _dispatch_pick(body: dict[str, Any], client) -> None:  # noqa: ANN001
     await _upload_one(client, channel_id, user_id, Path(path), cwd)
 
 
+async def _dispatch_confirm(body: dict[str, Any], client) -> None:  # noqa: ANN001
+    user_id, channel_id, cwd = _action_ctx(body)
+    if cwd is None:
+        return
+    path = _picked_value(body, "ccslack_send_confirm:")
+    if not path:
+        return
+    # confirmed=True bypasses the size gate; security re-validation still runs.
+    await _upload_one(client, channel_id, user_id, Path(path), cwd, confirmed=True)
+
+
 async def _dispatch_all(body: dict[str, Any], client) -> None:  # noqa: ANN001
     user_id, channel_id, cwd = _action_ctx(body)
     if cwd is None:
@@ -348,7 +455,8 @@ async def _dispatch_all(body: dict[str, Any], client) -> None:  # noqa: ANN001
     paths = [p for p in raw.split("\n") if p.strip()]
     ok = 0
     for p in paths:
-        if await _upload_one(client, channel_id, user_id, Path(p), cwd):
+        # Bulk is an explicit opt-in, so skip the per-file size confirm.
+        if await _upload_one(client, channel_id, user_id, Path(p), cwd, confirmed=True):
             ok += 1
     if ok < len(paths):
         await _ephemeral(

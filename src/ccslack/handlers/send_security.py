@@ -222,7 +222,12 @@ def validate_sendable(path: Path, cwd: Path) -> str | None:
     4. File size limit + regular-file check
     5. State-file protection (assert_sendable from utils)
     6. Gitleaks rule match
-    7. Gitignore check (subprocess — most expensive, last)
+
+    NOTE: gitignore membership is intentionally NOT a deny rule. Build
+    artifacts, logs, datasets, and model checkpoints are routinely
+    gitignored yet legitimately worth sending. Secrets are still blocked by
+    the hidden-file, secret-pattern, and gitleaks checks above — those don't
+    depend on a file being tracked by git.
     """
     if not is_path_contained(path, cwd):
         return "File is outside project directory"
@@ -246,9 +251,6 @@ def validate_sendable(path: Path, cwd: Path) -> str | None:
     rule_id = check_gitleaks_rules(path, cwd)
     if rule_id is not None:
         return f"File denied by gitleaks rule: {rule_id}"
-
-    if is_gitignored(path, cwd):
-        return "File is gitignored"
 
     return None
 

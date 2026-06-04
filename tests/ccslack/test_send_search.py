@@ -1,13 +1,17 @@
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from ccslack.handlers.send import (
+    _CONFIRM_THRESHOLD_BYTES,
     _find_files,
+    _human_size,
     _is_image,
     _safe_relative,
     _walk_filtered,
 )
+from ccslack.handlers.send_security import validate_sendable
 
 
 @pytest.fixture
@@ -76,3 +80,45 @@ def test_safe_relative(tmp_path: Path):
     f.parent.mkdir()
     f.write_bytes(b"i")
     assert _safe_relative(f, tmp_path) == "docs/x.png"
+
+
+# --- gitignore is no longer a deny rule -----------------------------------
+
+
+def test_gitignored_file_is_sendable(tmp_path: Path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / ".gitignore").write_text("*.log\nbuild/\n")
+    log = tmp_path / "app.log"
+    log.write_text("noise")
+    (tmp_path / "build").mkdir()
+    artifact = tmp_path / "build" / "out.bin"
+    artifact.write_bytes(b"x")
+    # Both are gitignored — they must NOT be refused anymore.
+    assert validate_sendable(log, tmp_path) is None
+    assert validate_sendable(artifact, tmp_path) is None
+
+
+def test_secret_named_file_still_refused(tmp_path: Path):
+    # Removing the gitignore rule must not weaken secret protection.
+    key = tmp_path / "id_rsa.pem"
+    key.write_text("-----BEGIN-----")
+    assert validate_sendable(key, tmp_path) is not None
+
+
+def test_hidden_file_still_refused(tmp_path: Path):
+    env = tmp_path / ".env"
+    env.write_text("SECRET=1")
+    assert validate_sendable(env, tmp_path) is not None
+
+
+# --- size confirm threshold -----------------------------------------------
+
+
+def test_confirm_threshold_is_10mb():
+    assert _CONFIRM_THRESHOLD_BYTES == 10 * 1024 * 1024
+
+
+def test_human_size_formats():
+    assert _human_size(500) == "0 KB" or _human_size(500).endswith("KB")
+    assert _human_size(2 * 1024 * 1024) == "2.0 MB"
+    assert _human_size(12 * 1024 * 1024) == "12.0 MB"
