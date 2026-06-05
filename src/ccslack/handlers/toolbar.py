@@ -7,12 +7,17 @@ to the bound window via ``tmux_manager.send_keys(..., literal=False)``.
 
 Flow:
   * Pinned status message has a ``🎛️ Toolbar`` button.
-  * Clicking it posts a new toolbar message in the channel with the
-    provider-specific button layout (Claude / Codex / Gemini / Pi / Shell).
+  * Clicking it posts a new toolbar message in the channel with a few lines
+    of live tmux pane text on top of the provider-specific button layout
+    (Claude / Codex / Gemini / Pi / Shell).
+  * A background refresh task re-captures the pane every
+    :data:`REFRESH_INTERVAL` seconds and ``chat.update``s the toolbar when the
+    pane content changes, so the live text tracks the TUI while you press
+    buttons. The loop runs until the toolbar is closed (or the window dies).
   * Each button click dispatches to ``_on_key`` which sends the named tmux
     key to the bound window. The toolbar message stays put so you can drive
     a picker (arrow keys + Enter) without re-clicking ``🎛️``.
-  * A ``Close`` button deletes the toolbar message.
+  * A ``Close`` button deletes the toolbar message and cancels its refresh.
 
 Action-id shape:
 
@@ -25,7 +30,9 @@ https://man7.org/linux/man-pages/man1/tmux.1.html#KEY_BINDINGS.
 
 from __future__ import annotations
 
+import asyncio
 import structlog
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from slack_sdk.errors import SlackApiError
@@ -33,11 +40,19 @@ from slack_sdk.errors import SlackApiError
 from ..session import session_manager
 from ..thread_router import thread_router
 from ..tmux_manager import tmux_manager
+from ..utils import task_done_callback
 
 if TYPE_CHECKING:
     from slack_bolt.async_app import AsyncApp
 
+    from ..slack_client import SlackClient
+
 logger = structlog.get_logger()
+
+# Live-text refresh tunables. The toolbar shows the tail of the tmux pane and
+# re-edits the message whenever the pane content changes, until it is closed.
+REFRESH_INTERVAL = 1.0  # seconds between pane re-captures
+_PANE_SNAPSHOT_LINES = 12  # tail lines shown above the buttons
 
 
 # (display, tmux_key) — display goes on the button, tmux_key into send-keys.
@@ -120,8 +135,51 @@ def _layout_for(provider: str) -> _Layout:
     return _LAYOUTS.get(provider.lower(), _CLAUDE_LAYOUT)
 
 
-def build_toolbar_blocks(window_id: str) -> tuple[list[dict[str, Any]], str]:
-    """Build the toolbar's Block Kit blocks for a window. Returns (blocks, fallback)."""
+# --------------------------------------------------------------------- live text
+
+
+async def _capture_pane_snippet(window_id: str) -> str:
+    """Last :data:`_PANE_SNAPSHOT_LINES` of cleaned tmux pane text."""
+    # Lazy: reuse the interactive picker's ANSI-stripping pane reader so the
+    # two live views stay byte-for-byte consistent.
+    from .interactive import _capture_pane_snippet as _full_snippet
+
+    snippet = await _full_snippet(window_id)
+    if not snippet:
+        return ""
+    lines = snippet.splitlines()
+    return "\n".join(lines[-_PANE_SNAPSHOT_LINES:]) if lines else ""
+
+
+def _hash_pane(text: str) -> str:
+    from .interactive import _hash_pane as _h
+
+    return _h(text)
+
+
+@dataclass
+class _ToolbarSession:
+    """Per-message live-toolbar state."""
+
+    channel_id: str
+    window_id: str
+    message_ts: str
+    last_pane_hash: str = ""
+    refresh_task: asyncio.Task[None] | None = field(default=None, repr=False)
+
+
+# Keyed by message ts — a channel can hold more than one open toolbar.
+_active_toolbars: dict[str, _ToolbarSession] = {}
+
+
+def build_toolbar_blocks(
+    window_id: str, pane: str | None = None
+) -> tuple[list[dict[str, Any]], str]:
+    """Build the toolbar's Block Kit blocks for a window. Returns (blocks, fallback).
+
+    When *pane* is provided, its (ANSI-stripped) tail is rendered as a code
+    block above the buttons so the toolbar carries a live view of the TUI.
+    """
     view = session_manager.view_window(window_id)
     provider = (view.provider_name if view else "") or "claude"
     layout = _layout_for(provider)
@@ -141,6 +199,14 @@ def build_toolbar_blocks(window_id: str) -> tuple[list[dict[str, Any]], str]:
             ],
         }
     ]
+    if pane and pane.strip():
+        snippet = pane.strip()[:2900]
+        blocks.append(
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"```\n{snippet}\n```"},
+            }
+        )
     for row in layout:
         blocks.append(
             {
@@ -180,19 +246,84 @@ async def open_toolbar(
     channel_id: str,
     window_id: str,
 ) -> str | None:
-    """Post the toolbar message in the channel. Returns the new ts."""
-    blocks, fallback = build_toolbar_blocks(window_id)
+    """Post the toolbar message in the channel and start its live-text refresh.
+
+    Returns the new message ts (or None on post failure).
+    """
+    pane = await _capture_pane_snippet(window_id)
+    blocks, fallback = build_toolbar_blocks(window_id, pane)
     try:
         result = await client.chat_postMessage(
             channel=channel_id, text=fallback, blocks=blocks
         )
-        return result.get("ts") if hasattr(result, "get") else result["ts"]
     except SlackApiError as exc:
         logger.warning(
             "toolbar post failed: %s",
             exc.response.get("error") if exc.response else exc,
         )
         return None
+    ts = result.get("ts") if hasattr(result, "get") else result["ts"]
+    if not ts:
+        return None
+
+    session = _ToolbarSession(
+        channel_id=channel_id,
+        window_id=window_id,
+        message_ts=ts,
+        last_pane_hash=_hash_pane(pane),
+    )
+    _active_toolbars[ts] = session
+    session.refresh_task = asyncio.create_task(
+        _refresh_loop(client, ts), name=f"ccslack-toolbar-refresh-{ts}"
+    )
+    session.refresh_task.add_done_callback(task_done_callback)
+    return ts
+
+
+async def _refresh_loop(client: SlackClient, ts: str) -> None:
+    """Re-edit the toolbar as the pane changes; stop when closed or window dies."""
+    while True:
+        try:
+            await asyncio.sleep(REFRESH_INTERVAL)
+        except asyncio.CancelledError:
+            raise
+        session = _active_toolbars.get(ts)
+        if session is None:
+            return
+
+        # Window gone between ticks → nothing left to mirror; stop spinning.
+        live_window = await tmux_manager.find_window_by_id(session.window_id)
+        if live_window is None:
+            _active_toolbars.pop(ts, None)
+            return
+
+        pane = await _capture_pane_snippet(session.window_id)
+        digest = _hash_pane(pane)
+        if digest == session.last_pane_hash:
+            continue
+        session.last_pane_hash = digest
+        blocks, fallback = build_toolbar_blocks(session.window_id, pane)
+        try:
+            await client.chat_update(
+                channel=session.channel_id, ts=ts, text=fallback, blocks=blocks
+            )
+        except SlackApiError as exc:
+            error = exc.response.get("error") if exc.response else str(exc)
+            if error == "message_not_found":
+                # User deleted the toolbar — drop the session and stop.
+                _active_toolbars.pop(ts, None)
+                return
+            logger.debug("toolbar chat.update failed (%s)", error)
+
+
+def _stop_refresh(ts: str) -> None:
+    """Cancel and forget the refresh task for a toolbar message, if any."""
+    session = _active_toolbars.pop(ts, None)
+    if session is None:
+        return
+    task = session.refresh_task
+    if task is not None and not task.done():
+        task.cancel()
 
 
 def register(app: AsyncApp) -> None:
@@ -231,6 +362,9 @@ def register(app: AsyncApp) -> None:
         if not ts:
             logger.warning("toolbar close: no message ts in action body")
             return
+        # Stop the live-text refresh before removing the message so the loop
+        # never races a chat.update against the delete.
+        _stop_refresh(ts)
         # Lazy: shared close helper lives in slack_sender; pulling at call
         # site keeps the toolbar import graph thin.
         from ..slack_sender import safe_close_message
@@ -286,6 +420,7 @@ def _extract_window_id(body: dict[str, Any], action_id: str) -> str:
 
 
 __all__ = [
+    "REFRESH_INTERVAL",
     "build_toolbar_blocks",
     "open_toolbar",
     "register",

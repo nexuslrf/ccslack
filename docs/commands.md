@@ -273,9 +273,16 @@ Provider-specific layouts:
 | **Pi** | same as Claude |
 | **Shell** | Enter · Ctrl-C · Ctrl-D · Ctrl-Z ··· ↑ ↓ Tab Esc |
 
+The toolbar message also shows the **last few lines of live tmux pane text**
+above the buttons. A background task re-captures the pane every second and
+edits the message in place whenever the content changes, so you can watch the
+TUI react as you press keys. The refresh runs until you close the toolbar (or
+the window dies).
+
 Every button has `action_id="ccslack_key:<tmux-key>"` and routes to
 `tmux_manager.send_keys(window_id, key, literal=False, enter=False)`.
-A separate ✖ **Close** button deletes the toolbar message.
+A separate ✖ **Close** button deletes the toolbar message and stops its
+live-text refresh.
 
 ### Live picker (posted on interactive prompts)
 
