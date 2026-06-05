@@ -14,10 +14,10 @@ before uploading.
 
 Security: every upload — direct, picked, or bulk — passes the full
 ``send_security.validate_sendable`` stack (path containment, hidden files,
-secret patterns, gitleaks rules, 50 MB Slack cap). Gitignored files are
-*allowed* (build artifacts, logs, datasets are commonly gitignored yet worth
-sending; secrets are still caught by the hidden-file / secret-pattern /
-gitleaks checks).
+secret patterns, gitleaks rules). There is no hard upper size limit; large
+files are gated by the confirm button instead. Gitignored files are *allowed*
+(build artifacts, logs, datasets are commonly gitignored yet worth sending;
+secrets are still caught by the hidden-file / secret-pattern / gitleaks checks).
 """
 
 from __future__ import annotations
@@ -50,7 +50,8 @@ _MAX_PICKER_BUTTONS = 23
 # Max chars of a relative path shown on a picker button before truncation.
 _LABEL_MAX = 72
 # Files at or above this size prompt a confirm button before uploading; smaller
-# files upload straight away. (The hard 50 MB cap is enforced in send_security.)
+# files upload straight away. There is no hard upper cap — the confirm step is
+# the only gate for large files.
 _CONFIRM_THRESHOLD_BYTES = 10 * 1024 * 1024
 
 _IMAGE_SUFFIXES = frozenset(

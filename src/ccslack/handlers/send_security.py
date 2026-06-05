@@ -58,7 +58,9 @@ _EXCLUDED_DIRS: frozenset[str] = frozenset(
     }
 )
 
-_TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024  # 50 MB
+# No hard upper size limit — Slack's files.upload v2 streams large files, and
+# the user opted out of a cap. The send handler still asks for confirmation
+# above CCSLACK confirm threshold so a huge upload is never silent.
 
 
 def is_path_contained(path: Path, root: Path) -> bool:
@@ -196,16 +198,17 @@ def check_gitleaks_rules(path: Path, cwd: Path) -> str | None:
 
 
 def _check_size_and_type(path: Path) -> str | None:
-    """Return an error string if the file fails size or type checks, else None."""
+    """Return an error string if the file fails the type check, else None.
+
+    No upper size limit is enforced — the send handler gates large files with
+    a confirm button instead of refusing them.
+    """
     try:
         st = path.stat()
     except OSError:
         return "File not accessible"
     if not stat.S_ISREG(st.st_mode):
         return "Not a regular file"
-    if st.st_size > _TELEGRAM_FILE_LIMIT:
-        size_mb = st.st_size / (1024 * 1024)
-        return f"File too large: {size_mb:.0f} MB (limit: 50 MB)"
     return None
 
 

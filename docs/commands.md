@@ -161,7 +161,8 @@ deny-by-default):
 - Secret-name patterns (`*.pem`, `*.key`, `*.env`, `*credential*`,
   `*secret*`, …)
 - `.gitleaks.toml` rules
-- 50 MB Slack file cap (hard limit)
+- No hard size cap — files **≥ 10 MB** require a one-tap confirm (see above);
+  there's no upper limit beyond what Slack itself accepts.
 
 > **Gitignored files are allowed.** Build artifacts, logs, datasets, and
 > model checkpoints are routinely gitignored yet legitimately worth sending.
