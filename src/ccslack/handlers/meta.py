@@ -113,6 +113,7 @@ def register(app: AsyncApp) -> None:
             "restore",
             "panes",
             "send",
+            "rename",
             "toolcalls",
             "thread",
             "help",
@@ -212,6 +213,10 @@ def register(app: AsyncApp) -> None:
             await handle_send(client, channel_id, user_id, raw_path)
             return
 
+        if sub == "rename":
+            await _handle_rename(client, channel_id, user_id, args)
+            return
+
         if sub == "toolcalls":
             await _handle_toolcalls(client, channel_id, user_id, args)
             return
@@ -245,6 +250,7 @@ def _help_text() -> str:
         f"• `{slash} restore [continue|resume|fresh]` — respawn a dead session "
         "(after reboot / tmux restart).\n"
         f"• `{slash} panes` — list all tmux panes for this session.\n"
+        f"• `{slash} rename <new-name>` — rename this session's Slack channel.\n"
         f"• `{slash} send <path|glob|substring>` — upload file(s) from the "
         "session's cwd (e.g. `send docs/arch.png`, `send *.png`, `send arch`).\n"
         f"• `{slash} toolcalls [shown|hidden|default]` — show/hide tool_use & "
@@ -582,6 +588,70 @@ async def _handle_list(client, channel_id: str, user_id: str) -> None:  # noqa: 
         channel=channel_id,
         user=user_id,
         text="\n".join(lines),
+    )
+
+
+async def _handle_rename(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    args: list[str],
+) -> None:
+    """Implements ``/ccslack rename <new-name>`` — rename THIS session's channel.
+
+    Only meaningful inside a bound session channel: the channel being renamed is
+    the one the command was issued from. The requested name is sanitised to a
+    Slack-legal slug before the ``conversations.rename`` call.
+    """
+    window_id = thread_router.get_window_for_channel(channel_id)
+    if window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                "ccslack: `rename` only works inside a bound session channel "
+                "(it renames the channel you run it from)."
+            ),
+        )
+        return
+
+    raw = " ".join(args).strip()
+    if not raw:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack: usage `{config.slash_command} rename <new-name>`",
+        )
+        return
+
+    slug = _sanitize_channel_name(raw)
+    bolt_client = BoltSlackClient(client)
+    try:
+        await bolt_client.conversations_rename(channel=channel_id, name=slug)
+    except SlackApiError as exc:
+        error = exc.response.get("error") if exc.response else str(exc)
+        if error == "name_taken":
+            text = (
+                f"ccslack: a channel named `{slug}` already exists — "
+                "pick a different name."
+            )
+        else:
+            text = f"ccslack: rename failed — {error}"
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=text,
+        )
+        return
+
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=f"ccslack: renamed this channel to `#{slug}`.",
     )
 
 

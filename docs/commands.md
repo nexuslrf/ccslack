@@ -146,6 +146,18 @@ multi-pane team.
 - **Where**: a bound session channel.
 - **Auth**: channel membership.
 
+### `/ccslack rename <new-name>`
+
+Renames the Slack channel you run it from. The name is lowercased and
+sanitised to a Slack-legal slug (alphanumeric + hyphen, ≤60 chars), so
+`Auth Refactor` becomes `auth-refactor`. The `channel_id` is stable across
+renames, so all bindings keep working.
+
+- **Where**: a bound session channel (it renames *that* channel).
+- **Auth**: channel membership.
+- If the target name is already taken Slack returns `name_taken` and the
+  command reports it without changing anything.
+
 ### `/ccslack send <path|glob|substring>`
 
 Upload file(s) — including images, which Slack previews inline — from the
@@ -369,7 +381,7 @@ invoke that form by hand.
 | Dashboard 🗑️ Kill button | `ALLOWED_USERS` |
 | `/ccslack kill --all`, kill by `<#channel>` / `C…` / `@N` | `ALLOWED_USERS` |
 | `/ccslack kill` (from session channel) | Channel membership |
-| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `toolcalls`, `thread` | Channel membership |
+| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread` | Channel membership |
 | Inbound message → tmux | Channel membership |
 | Status-message buttons (Screenshot, Toolbar, Archive) | Channel membership |
 | Live picker buttons | Channel membership |
