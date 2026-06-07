@@ -97,7 +97,14 @@ def build_new_session_view(
                                 "text": "Create a fresh git worktree (when eligible)",
                             },
                             "value": "worktree",
-                        }
+                        },
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": "YOLO — skip approvals (claude/codex/gemini)",
+                            },
+                            "value": "yolo",
+                        },
                     ],
                 },
             },
@@ -156,7 +163,9 @@ def register(app: AsyncApp) -> None:
             .get("selected_options")
             or []
         )
-        want_worktree = any(o.get("value") == "worktree" for o in wt_selected)
+        selected_values = {o.get("value") for o in wt_selected}
+        want_worktree = "worktree" in selected_values
+        want_yolo = "yolo" in selected_values
         branch = (
             state_values.get("branch_block", {}).get("branch", {}).get("value") or ""
         ).strip() or None
@@ -181,6 +190,7 @@ def register(app: AsyncApp) -> None:
             provider=provider,
             want_worktree=want_worktree,
             worktree_branch=branch,
+            want_yolo=want_yolo,
         )
 
 

@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from slack_sdk.errors import SlackApiError
 
 from ..config import config
-from ..providers import resolve_launch_command
+from ..providers import has_yolo_mode, resolve_launch_command
 from ..session import session_manager
 from ..slack_client import BoltSlackClient
 from ..thread_router import thread_router
@@ -232,9 +232,12 @@ def _help_text() -> str:
     slash = config.slash_command
     return (
         "*ccslack commands*\n"
-        f"• `{slash} new <directory> [provider]` — start a new session.\n"
+        f"• `{slash} new <directory> [provider] [--worktree [branch]] [--yolo]` "
+        "— start a new session.\n"
         "    provider ∈ {claude, codex, gemini, pi, shell}; default: "
         f"`{config.provider_name}`.\n"
+        "    `--yolo` launches claude/codex/gemini with approvals skipped "
+        "(dangerous).\n"
         f"• `{slash} list` — quick list of active sessions.\n"
         f"• `{slash} sessions` — interactive dashboard with per-session kill.\n"
         f"• `{slash} history [N]` — last N transcript messages in this channel.\n"
@@ -275,8 +278,9 @@ async def _handle_new(
         )
         return
 
-    # Parse optional --worktree [branch-name] flag out of args.
+    # Parse optional --worktree [branch-name] and --yolo flags out of args.
     want_worktree = False
+    want_yolo = False
     worktree_branch: str | None = None
     cleaned: list[str] = []
     i = 0
@@ -289,6 +293,8 @@ async def _handle_new(
                 worktree_branch = nxt
                 i += 2
                 continue
+        elif a in ("--yolo", "--dangerous"):
+            want_yolo = True
         else:
             cleaned.append(a)
         i += 1
@@ -299,7 +305,10 @@ async def _handle_new(
             client.chat_postEphemeral,
             channel=channel_id,
             user=user_id,
-            text="ccslack: usage `/ccslack new <directory> [provider] [--worktree [branch]]`",
+            text=(
+                "ccslack: usage `/ccslack new <directory> [provider] "
+                "[--worktree [branch]] [--yolo]`"
+            ),
         )
         return
 
@@ -316,6 +325,21 @@ async def _handle_new(
             ),
         )
         return
+
+    # YOLO (permissive launch) is only meaningful for agents that expose a
+    # skip-approvals flag. Requesting it for shell/pi is a no-op — warn and
+    # fall back to a normal launch rather than silently dropping intent.
+    if want_yolo and not has_yolo_mode(provider):
+        want_yolo = False
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: `--yolo` ignored — `{provider}` has no permissive "
+                "launch mode (supported: claude, codex, gemini)."
+            ),
+        )
 
     work_dir = Path(raw_dir).expanduser()
     try:
@@ -392,7 +416,12 @@ async def _handle_new(
             created_worktree_branch = branch
 
     # Spawn tmux window first — fail fast if tmux isn't reachable.
-    launch_command = None if provider == "shell" else resolve_launch_command(provider)
+    approval_mode = "yolo" if want_yolo else "normal"
+    launch_command = (
+        None
+        if provider == "shell"
+        else resolve_launch_command(provider, approval_mode=approval_mode)
+    )
     success, message, window_name, window_id = await tmux_manager.create_window(
         work_dir=str(spawn_dir),
         window_name=_sanitize_channel_name(spawn_dir.name),
@@ -498,22 +527,30 @@ async def _handle_new(
     )
 
     # Announce in both channels.
+    yolo_suffix = "  :warning: *YOLO*" if want_yolo else ""
     await _post_ephemeral(
         client.chat_postEphemeral,
         channel=channel_id,
         user=user_id,
         text=(
             f"ccslack: started <#{new_channel}> · `{provider}` · "
-            f"tmux `{window_id}` ({work_dir})"
+            f"tmux `{window_id}` ({work_dir}){yolo_suffix}"
         ),
     )
     try:
+        yolo_line = (
+            "\n:warning: *YOLO mode* — the agent runs with approvals/sandbox "
+            "skipped. It can edit files and run commands without asking."
+            if want_yolo
+            else ""
+        )
         await bolt_client.chat_postMessage(
             channel=new_channel,
             text=(
                 f":sparkles: Session ready — `{provider}` in `{work_dir}`.\n"
                 f"tmux window `{window_id}` ({window_name}). "
                 "Type a message to send it to the agent."
+                f"{yolo_line}"
             ),
         )
     except SlackApiError:
@@ -1137,6 +1174,7 @@ async def create_session(
     provider: str,
     want_worktree: bool,
     worktree_branch: str | None,
+    want_yolo: bool = False,
 ) -> None:
     """Public entry point shared by ``_handle_new`` (slash) and the modal.
 
@@ -1148,6 +1186,8 @@ async def create_session(
         args.append("--worktree")
         if worktree_branch:
             args.append(worktree_branch)
+    if want_yolo:
+        args.append("--yolo")
     await _handle_new(client, meta_channel_id, user_id, args)
 
 

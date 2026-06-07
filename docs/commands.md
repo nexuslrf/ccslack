@@ -19,11 +19,28 @@ Create a new session.
 
 | Form | Behaviour |
 |---|---|
-| `/ccslack new` | Opens a Block Kit modal — directory text input, provider radio, "create fresh git worktree" checkbox + optional branch name |
+| `/ccslack new` | Opens a Block Kit modal — directory text input, provider radio, "create fresh git worktree" + "YOLO" checkboxes + optional branch name |
 | `/ccslack new <dir>` | Default provider in `<dir>` |
 | `/ccslack new <dir> <provider>` | `provider` ∈ `claude` `codex` `gemini` `pi` `shell` |
 | `/ccslack new <dir> claude --worktree` | Spawns a fresh `git worktree` (auto-named `ccg/<slug>`) and uses *that* path as the session cwd |
 | `/ccslack new <dir> claude --worktree feature-x` | Same but with a named branch |
+| `/ccslack new <dir> codex --yolo` | Launches the agent with approvals/sandbox **skipped** — see YOLO below |
+
+#### YOLO (permissive launch)
+
+`--yolo` (alias `--dangerous`, or the modal checkbox) starts the agent with
+its skip-approvals flag so it edits files and runs commands without asking:
+
+| Provider | Flag appended |
+|---|---|
+| `claude` | `--dangerously-skip-permissions` |
+| `codex` | `--dangerously-bypass-approvals-and-sandbox` |
+| `gemini` | `--yolo` |
+
+It's a no-op for `pi` / `shell` (no such mode) — the request is ignored with
+an ephemeral warning. YOLO sessions are flagged with a :warning: in the
+start announcement and the channel's welcome message. Combine freely with
+`--worktree` to keep an autonomous agent boxed into a throwaway branch.
 
 **Where it works**: meta channel only.
 **Auth**: `ALLOWED_USERS`.
