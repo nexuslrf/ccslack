@@ -6,9 +6,11 @@ from ccslack.handlers.recovery import (
     _slug_from_cwd,
     parse_channel_topic,
     recover_channel_context,
+    restore_window,
 )
 from ccslack.session import session_manager
 from ccslack.slack_client import FakeSlackClient
+from ccslack.thread_router import thread_router
 from ccslack.window_state_store import window_store
 
 CLAUDE_ID = "01234567-89ab-cdef-0123-456789abcdef"
@@ -122,3 +124,60 @@ async def test_recover_channel_context_empty_topic_returns_none():
         "channel": {"topic": {"value": ""}},
     }
     assert await recover_channel_context(client, "C0LOST") is None
+
+
+# --- restore_window topic fallback (regression for startup-prune bug) ---------
+
+
+@pytest.fixture
+def _clean_state():
+    window_store.window_states.clear()
+    thread_router.reset()
+    yield
+    window_store.window_states.clear()
+    thread_router.reset()
+
+
+@pytest.mark.asyncio
+async def test_restore_window_falls_back_to_topic_when_cwd_missing(
+    monkeypatch, _clean_state
+):
+    thread_router.bind_channel("C0WIPED", "@55", window_name="proj")
+
+    client = FakeSlackClient()
+    client.returns["conversations_info"] = {
+        "ok": True,
+        "channel": {"topic": {"value": "codex · /recovered/path"}},
+    }
+
+    spawned = []
+
+    async def _fake_restore_in_channel(c, ch, *, provider, cwd, **kw):
+        spawned.append((provider, cwd))
+        return "@99"
+
+    monkeypatch.setattr(
+        "ccslack.handlers.recovery.restore_in_channel", _fake_restore_in_channel
+    )
+
+    result = await restore_window(client, "C0WIPED", "@55", mode="continue")
+
+    assert result == "@99"
+    assert spawned == [("codex", "/recovered/path")]
+
+
+@pytest.mark.asyncio
+async def test_restore_window_returns_none_when_topic_also_missing(
+    monkeypatch, _clean_state
+):
+    thread_router.bind_channel("C0NOTOPIC", "@56", window_name="proj")
+
+    client = FakeSlackClient()
+    client.returns["conversations_info"] = {
+        "ok": True,
+        "channel": {"topic": {"value": ""}},
+    }
+
+    result = await restore_window(client, "C0NOTOPIC", "@56", mode="continue")
+
+    assert result is None

@@ -339,17 +339,39 @@ async def restore_window(
     Thin wrapper over :func:`restore_in_channel` that reads the dead window's
     remembered provider / cwd / session id. Used by the recovery banner
     buttons, ``/ccslack restore`` (bound case), and startup auto-recovery.
+
+    When the in-memory window state has lost its cwd (e.g. after the startup
+    prune ran before this fix was deployed), falls back to reading provider +
+    cwd from the channel topic — the same recovery path used for unbound
+    channels.
     """
     view = session_manager.view_window(window_id)
-    if view is None or not view.cwd:
-        logger.warning("restore: no remembered cwd for window %s", window_id)
-        return None
+    provider = (view.provider_name if view else "") or config.provider_name
+    cwd = (view.cwd if view else "") or ""
+    session_id = (view.session_id if view else "") or ""
+
+    if not cwd:
+        logger.info(
+            "restore: cwd missing for window %s, falling back to channel topic",
+            window_id,
+        )
+        context = await recover_channel_context(client, channel_id)
+        if context is None:
+            logger.warning(
+                "restore: no remembered cwd and topic unreadable for window %s",
+                window_id,
+            )
+            return None
+        provider, cwd = context
+        if mode == "resume":
+            session_id = _latest_session_id_for(provider, cwd)
+
     return await restore_in_channel(
         client,
         channel_id,
-        provider=view.provider_name or config.provider_name,
-        cwd=view.cwd,
-        session_id=view.session_id or "",
+        provider=provider,
+        cwd=cwd,
+        session_id=session_id,
         mode=mode,
         old_window_id=window_id,
         window_name=thread_router.get_display_name(window_id),
