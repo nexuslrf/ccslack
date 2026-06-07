@@ -105,11 +105,7 @@ def test_looks_like_prompt_rejects_user_output():
 
 
 def test_strip_trailing_prompt_removes_bash_prompt():
-    text = (
-        "ls\n"
-        "file1 file2\n"
-        "(base) ruofan@amd-03:/nvmepool/ruofan$"
-    )
+    text = "ls\nfile1 file2\n(base) ruofan@amd-03:/nvmepool/ruofan$"
     assert _strip_trailing_prompt(text) == "ls\nfile1 file2"
 
 
@@ -167,9 +163,7 @@ def test_prompt_returned_positive_after_command():
 def test_prompt_returned_negative_while_running():
     before = "(base) user@host:/path$ "
     after = (
-        "(base) user@host:/path$ du -sh *\n"
-        "1.3T cache\n"
-        "424G datasets"
+        "(base) user@host:/path$ du -sh *\n1.3T cache\n424G datasets"
         # No new prompt yet — command still in progress.
     )
     assert _prompt_returned(before, after) is False
@@ -204,11 +198,5 @@ def test_end_to_end_strip_pipeline():
     cleaned = _strip_trailing_prompt(captured)
     cleaned = _strip_echoed_command(cleaned, "ls").rstrip()
     body = _format_body("ls", cleaned)
-    expected = (
-        "> `ls`\n"
-        "```\n"
-        "file1 file2 file3\n"
-        "file4 file5\n"
-        "```"
-    )
+    expected = "> `ls`\n```\nfile1 file2 file3\nfile4 file5\n```"
     assert body == expected

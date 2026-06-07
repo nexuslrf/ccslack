@@ -165,9 +165,7 @@ def test_clear_window_drops_state():
 
 def test_mark_slack_command_records_message_ts():
     shell_marker.reset_for_testing()
-    shell_marker.mark_slack_command(
-        "@77", slack_user_message_ts="1700000000.000001"
-    )
+    shell_marker.mark_slack_command("@77", slack_user_message_ts="1700000000.000001")
     state = shell_marker._state["@77"]
     assert state.slack_user_message_ts == "1700000000.000001"
     shell_marker.reset_for_testing()

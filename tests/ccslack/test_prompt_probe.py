@@ -63,7 +63,11 @@ def test_mark_dismissed_sets_cooldown():
     mark_dismissed("C0X")
     until = prompt_probe._dismissed_until.get("C0X", 0.0)
     # The cooldown window should land within the expected range.
-    assert before + DISMISS_COOLDOWN_SECONDS - 1 <= until <= before + DISMISS_COOLDOWN_SECONDS + 1
+    assert (
+        before + DISMISS_COOLDOWN_SECONDS - 1
+        <= until
+        <= before + DISMISS_COOLDOWN_SECONDS + 1
+    )
     clear_dismiss("C0X")
 
 
@@ -110,14 +114,18 @@ async def test_dismiss_cooldown_self_extends_while_prompt_present():
 
     with (
         patch.object(
-            prompt_probe.session_manager, "view_window", return_value=type(
-                "V", (), {"provider_name": "codex"}
-            )(),
+            prompt_probe.session_manager,
+            "view_window",
+            return_value=type("V", (), {"provider_name": "codex"})(),
         ),
         patch.object(
-            prompt_probe.tmux_manager, "capture_pane_scrollback", side_effect=fake_capture
+            prompt_probe.tmux_manager,
+            "capture_pane_scrollback",
+            side_effect=fake_capture,
         ),
-        patch("ccslack.handlers.interactive.is_in_interactive_mode", return_value=False),
+        patch(
+            "ccslack.handlers.interactive.is_in_interactive_mode", return_value=False
+        ),
         patch("ccslack.handlers.interactive.enter_from_pane", side_effect=noop_enter),
     ):
         await prompt_probe.maybe_post_prompt(client, channel_id, window_id)
@@ -159,7 +167,9 @@ async def test_dismiss_cooldown_clears_when_prompt_goes_away():
             "capture_pane_scrollback",
             side_effect=fake_capture,
         ),
-        patch("ccslack.handlers.interactive.is_in_interactive_mode", return_value=False),
+        patch(
+            "ccslack.handlers.interactive.is_in_interactive_mode", return_value=False
+        ),
     ):
         await prompt_probe.maybe_post_prompt(client, channel_id, window_id)
 

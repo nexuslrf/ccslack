@@ -35,9 +35,7 @@ def test_user_role_truncates_long_text():
 
 def test_user_role_wins_over_content_type():
     # A user-role 'thinking' would be unusual but role should still take precedence.
-    out = _decorate(
-        _msg("musing", role="user", content_type="thinking"), "musing"
-    )
+    out = _decorate(_msg("musing", role="user", content_type="thinking"), "musing")
     assert out.startswith(":bust_in_silhouette: ")
     assert ":thought_balloon:" not in out
 

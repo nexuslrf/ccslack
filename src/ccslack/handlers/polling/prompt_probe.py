@@ -161,9 +161,7 @@ async def maybe_post_prompt(
     # the cooldown while the prompt persists makes the dismiss feel
     # permanent until the prompt actually goes away.
     if channel_id in _dismissed_until:
-        _dismissed_until[channel_id] = (
-            time.monotonic() + DISMISS_COOLDOWN_SECONDS
-        )
+        _dismissed_until[channel_id] = time.monotonic() + DISMISS_COOLDOWN_SECONDS
         # Also refresh the dedup hash so a subsequent post-dismiss tick
         # with the same pane content short-circuits via the cheaper hash
         # check (skip the cooldown branch).

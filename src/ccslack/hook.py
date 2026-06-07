@@ -1169,9 +1169,7 @@ def hook_main(
     # interleave debug lines with the Codex ``{}`` ack and break Codex's "Stop
     # hook must return valid JSON" contract. Pin all structlog output to stderr
     # for the hook subprocess so stdout carries only the JSON ack.
-    structlog.configure(
-        logger_factory=structlog.PrintLoggerFactory(file=sys.stderr)
-    )
+    structlog.configure(logger_factory=structlog.PrintLoggerFactory(file=sys.stderr))
 
     if install:
         logger.info("Hook install requested")

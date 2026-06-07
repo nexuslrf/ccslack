@@ -179,9 +179,7 @@ def _extract_command_output(text: str) -> _CommandOutput:
         return _CommandOutput(text="", exit_code=exit_code)
 
     output_lines = lines[start_idx + 1 : end_idx]
-    return _CommandOutput(
-        text="\n".join(output_lines), exit_code=exit_code
-    )
+    return _CommandOutput(text="\n".join(output_lines), exit_code=exit_code)
 
 
 def _find_command_echo(lines: list[str]) -> tuple[str, int] | None:
@@ -330,9 +328,7 @@ async def _relay_passive_output(
         clean_text = strip_terminal_glyphs(passive.text)
         body = _format(cmd, clean_text, in_progress=passive.exit_code is None)
         if state.msg_ts:
-            await safe_update(
-                client, channel=channel_id, ts=state.msg_ts, text=body
-            )
+            await safe_update(client, channel=channel_id, ts=state.msg_ts, text=body)
         elif body:
             new_ts = await safe_post(client, channel=channel_id, text=body)
             if new_ts:

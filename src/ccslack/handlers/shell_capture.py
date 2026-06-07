@@ -287,7 +287,9 @@ def _format_body(command: str, output: str, *, still_running: bool = False) -> s
     """
     header = f"> `{command}`" if command else ""
     if still_running and header:
-        header += f" _(still running — capture stopped at {int(WAIT_FOR_PROMPT_SECONDS)}s)_"
+        header += (
+            f" _(still running — capture stopped at {int(WAIT_FOR_PROMPT_SECONDS)}s)_"
+        )
     if output:
         body = f"```\n{output}\n```"
         return f"{header}\n{body}" if header else body

@@ -368,10 +368,14 @@ class SessionMapSync:
 
         Reads session_map.json, drops entries whose window_id is not in
         live_window_ids, and writes back only if changes were made.
-        Also removes corresponding window_states.
+        Also removes corresponding window_states, BUT only for unbound windows
+        — bound windows keep their state so restore can find the cwd.
         """
         # Lazy: same cycle + wiring contract as _prefer_existing_primary.
         from .window_state_store import window_store
+
+        # Lazy: thread_router wired by SessionManager constructor.
+        from .thread_router import thread_router
 
         if not config.session_map_file.exists():
             return
@@ -392,13 +396,15 @@ class SessionMapSync:
         if not dead_entries:
             return
 
+        bound_wids = {wid for wid in thread_router.channel_bindings.values() if wid}
         changed_state = False
         for key, window_id in dead_entries:
             logger.info(
                 "Pruning dead session_map entry: %s (window %s)", key, window_id
             )
             del raw[key]
-            if window_store.has_window(window_id):
+            # Keep window_state if the channel is still bound — restore needs cwd/provider.
+            if window_id not in bound_wids and window_store.has_window(window_id):
                 window_store.remove_window(window_id)
                 changed_state = True
 

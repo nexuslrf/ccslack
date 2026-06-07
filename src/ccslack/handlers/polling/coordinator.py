@@ -105,9 +105,7 @@ def prune_channel(channel_id: str, window_id: str | None = None) -> None:
         pass
     else:
         clear_channel(channel_id)
-    logger.info(
-        "Pruned gone channel %s (window %s) — binding removed", channel_id, wid
-    )
+    logger.info("Pruned gone channel %s (window %s) — binding removed", channel_id, wid)
 
 
 def start_status_polling(client: SlackClient) -> asyncio.Task[None]:
