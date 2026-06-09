@@ -73,6 +73,7 @@ async def _post_ephemeral(client_method, **kwargs: Any) -> None:
 def register(app: AsyncApp) -> None:
     """Wire the configured slash command (``config.slash_command``)."""
     register_dashboard_actions(app)
+    register_yolo_actions(app)
 
     slash = config.slash_command
 
@@ -116,6 +117,7 @@ def register(app: AsyncApp) -> None:
             "rename",
             "toolcalls",
             "thread",
+            "yolo",
             "help",
             "?",
             "-h",
@@ -225,6 +227,10 @@ def register(app: AsyncApp) -> None:
             await _handle_thread(client, channel_id, user_id, args)
             return
 
+        if sub == "yolo":
+            await _handle_yolo(client, channel_id, user_id)
+            return
+
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
@@ -251,6 +257,8 @@ def _help_text() -> str:
         "(after reboot / tmux restart).\n"
         f"• `{slash} panes` — list all tmux panes for this session.\n"
         f"• `{slash} rename <new-name>` — rename this session's Slack channel.\n"
+        f"• `{slash} yolo` — Ctrl-C the running agent and restart it with "
+        "approvals/sandbox skipped (claude/codex/gemini only).\n"
         f"• `{slash} send <path|glob|substring>` — upload file(s) from the "
         "session's cwd (e.g. `send docs/arch.png`, `send *.png`, `send arch`).\n"
         f"• `{slash} toolcalls [shown|hidden|default]` — show/hide tool_use & "
@@ -1201,6 +1209,193 @@ async def _handle_sessions(client, channel_id: str, user_id: str) -> None:  # no
     )
 
 
+async def _handle_yolo(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+) -> None:
+    """``/ccslack yolo`` — interrupt the current agent and restart it in YOLO mode.
+
+    Sends a confirm message in the channel. The actual Ctrl-C + relaunch happens
+    when the user clicks the confirm button (``ccslack_yolo_confirm`` action).
+    """
+    window_id = thread_router.get_window_for_channel(channel_id)
+    if window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `yolo` only works inside a bound session channel.",
+        )
+        return
+
+    live = await tmux_manager.find_window_by_id(window_id)
+    if live is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: the session window is dead — use `/ccslack restore` first.",
+        )
+        return
+
+    view = session_manager.view_window(window_id)
+    provider = (view.provider_name if view else "") or config.provider_name
+
+    if not has_yolo_mode(provider):
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack: `{provider}` doesn't have a YOLO/skip-approvals mode.",
+        )
+        return
+
+    if view and view.approval_mode == "yolo":
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: this session is already in YOLO mode.",
+        )
+        return
+
+    # Build the command preview so the user can see exactly what will run.
+    from .recovery import _build_launch_args_for
+
+    launch_cmd = resolve_launch_command(provider, approval_mode="yolo")
+    continue_args = _build_launch_args_for(
+        provider, (view.session_id or "") if view else "", "continue"
+    )
+    full_cmd = f"{launch_cmd} {continue_args}".strip() if continue_args else launch_cmd
+
+    await client.chat_postMessage(
+        channel=channel_id,
+        text=f":warning: Switch `{provider}` to YOLO mode?",
+        blocks=[
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": (
+                        f":warning: *Switch to YOLO mode?*\n"
+                        f"This will `Ctrl-C` the running `{provider}` process and"
+                        f" restart it as:\n```{full_cmd}```\n"
+                        "The agent will run with approvals/sandbox skipped."
+                    ),
+                },
+            },
+            {
+                "type": "actions",
+                "block_id": f"ccslack_yolo_actions:{window_id}",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": "ccslack_yolo_confirm",
+                        "style": "danger",
+                        "text": {"type": "plain_text", "text": ":zap: Confirm YOLO"},
+                        "value": window_id,
+                    },
+                    {
+                        "type": "button",
+                        "action_id": "ccslack_yolo_cancel",
+                        "text": {"type": "plain_text", "text": "Cancel"},
+                        "value": window_id,
+                    },
+                ],
+            },
+        ],
+    )
+
+
+def register_yolo_actions(app) -> None:  # noqa: ANN001
+    """Wire the YOLO confirm / cancel button actions."""
+    import asyncio
+
+    @app.action("ccslack_yolo_confirm")
+    async def on_yolo_confirm(ack, body, client) -> None:  # noqa: ANN001
+        await ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel_id = body.get("channel", {}).get("id", "")
+        message_ts = (body.get("message") or {}).get("ts", "")
+
+        from .auth import is_authorized
+
+        if not is_authorized(user_id, channel_id):
+            return
+
+        window_id = ""
+        for action in body.get("actions", []) or []:
+            if action.get("action_id") == "ccslack_yolo_confirm":
+                window_id = action.get("value", "")
+                break
+        if not window_id:
+            return
+
+        live = await tmux_manager.find_window_by_id(window_id)
+        if live is None:
+            if message_ts and channel_id:
+                await client.chat_update(
+                    channel=channel_id,
+                    ts=message_ts,
+                    text="ccslack: window died before YOLO restart.",
+                    blocks=[],
+                )
+            return
+
+        view = session_manager.view_window(window_id)
+        provider = (view.provider_name if view else "") or config.provider_name
+
+        from .recovery import _build_launch_args_for
+
+        launch_cmd = resolve_launch_command(provider, approval_mode="yolo")
+        continue_args = _build_launch_args_for(
+            provider, (view.session_id or "") if view else "", "continue"
+        )
+        full_cmd = (
+            f"{launch_cmd} {continue_args}".strip() if continue_args else launch_cmd
+        )
+
+        # Interrupt the current agent process.
+        await tmux_manager.send_keys(window_id, "C-c", literal=False, enter=False)
+        await asyncio.sleep(1.5)
+        # Relaunch with YOLO + continue flags in the same tmux window.
+        await tmux_manager.send_keys(window_id, full_cmd, literal=False, enter=True)
+
+        session_manager.set_window_approval_mode(window_id, "yolo")
+
+        if message_ts and channel_id:
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text=(
+                    f":zap: *YOLO mode activated* — restarted `{provider}` as "
+                    f"`{full_cmd}`."
+                ),
+                blocks=[],
+            )
+
+        # Refresh the pinned status message to show the YOLO badge.
+        # Lazy: status helpers pull session_manager.
+        from .status import update_status
+
+        bolt_client = BoltSlackClient(client)
+        await update_status(bolt_client, channel_id, window_id, "idle")
+
+    @app.action("ccslack_yolo_cancel")
+    async def on_yolo_cancel(ack, body, client) -> None:  # noqa: ANN001
+        await ack()
+        channel_id = body.get("channel", {}).get("id", "")
+        message_ts = (body.get("message") or {}).get("ts", "")
+        if message_ts and channel_id:
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text=":x: YOLO restart cancelled.",
+                blocks=[],
+            )
+
+
 def register_dashboard_actions(app) -> None:  # noqa: ANN001
     """Wire the dashboard Kill button (called by handlers.registry)."""
 
@@ -1261,4 +1456,9 @@ async def create_session(
     await _handle_new(client, meta_channel_id, user_id, args)
 
 
-__all__ = ["create_session", "register", "register_dashboard_actions"]
+__all__ = [
+    "create_session",
+    "register",
+    "register_dashboard_actions",
+    "register_yolo_actions",
+]
