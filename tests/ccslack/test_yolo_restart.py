@@ -121,7 +121,10 @@ async def test_yolo_rejects_unsupported_provider(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_yolo_rejects_already_yolo(monkeypatch):
+async def test_yolo_allows_reyolo_when_flag_already_set(monkeypatch):
+    # The persisted approval_mode flag is unreliable (it drifts when the agent
+    # restarts outside this flow), so /ccslack yolo must still offer to restart
+    # even when the window is already flagged yolo.
     _bind("C0Y5", "@14", provider="claude")
     session_manager.set_window_approval_mode("@14", "yolo")
     client = FakeSlackClient()
@@ -136,6 +139,7 @@ async def test_yolo_rejects_already_yolo(monkeypatch):
 
     await _handle_yolo(client, "C0Y5", "U1")
 
-    assert client.call_count("chat_postMessage") == 0
-    eph = client.last_call("chat_postEphemeral")
-    assert "already" in eph.kwargs["text"]
+    assert client.call_count("chat_postEphemeral") == 0
+    msg = client.last_call("chat_postMessage")
+    assert msg is not None
+    assert "YOLO" in msg.kwargs["text"]

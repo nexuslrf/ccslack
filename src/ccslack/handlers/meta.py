@@ -1272,14 +1272,11 @@ async def _handle_yolo(
         )
         return
 
-    if view and view.approval_mode == "yolo":
-        await _post_ephemeral(
-            client.chat_postEphemeral,
-            channel=channel_id,
-            user=user_id,
-            text="ccslack: this session is already in YOLO mode.",
-        )
-        return
+    # Intentionally NOT gated on view.approval_mode == "yolo": that flag is
+    # ccslack's persisted belief and drifts from reality whenever the agent is
+    # restarted outside this flow, so it can't be trusted to mean the live
+    # process is actually in YOLO. The action is explicit and confirmed below,
+    # and re-running it is an idempotent restart, so always offer it.
 
     # Build the command preview so the user can see exactly what will run.
     from .recovery import _build_launch_args_for
