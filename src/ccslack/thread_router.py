@@ -194,6 +194,18 @@ class ThreadRouter:
         """Look up the window_id bound to a channel."""
         return self.channel_bindings.get(channel_id)
 
+    def effective_window_id(self, channel_id: str, fallback: str = "") -> str:
+        """Resolve a channel's current window, preferring the live binding.
+
+        Action buttons embed the window_id that was current when the message
+        was posted, but a restore can rebind the channel to a NEW window_id
+        (the old window died and a fresh one was spawned). Since
+        1 channel = 1 window, the binding is the source of truth — prefer it,
+        and only fall back to the embedded button value when the channel is no
+        longer bound.
+        """
+        return self.channel_bindings.get(channel_id) or fallback
+
     def get_channel_for_window(self, window_id: str) -> str | None:
         """Reverse lookup: get channel_id for a window (O(1))."""
         return self._window_to_channel.get(window_id)

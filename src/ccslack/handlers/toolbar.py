@@ -339,7 +339,11 @@ def register(app: AsyncApp) -> None:
 
         if not is_authorized(user_id, channel_id) or not channel_id:
             return
-        window_id = _extract_window_id(body, "ccslack_toolbar_open")
+        # Prefer the channel's live binding — a restore may have rebound this
+        # channel to a new window since this button was posted.
+        window_id = thread_router.effective_window_id(
+            channel_id, _extract_window_id(body, "ccslack_toolbar_open")
+        )
         if not window_id:
             return
         await open_toolbar(client, channel_id, window_id)
@@ -392,13 +396,16 @@ async def _dispatch_key(body: dict[str, Any]) -> None:
         return
 
     action_id = ""
-    window_id = ""
+    button_value = ""
     for action in body.get("actions", []) or []:
         aid = action.get("action_id", "")
         if aid.startswith("ccslack_key:"):
             action_id = aid
-            window_id = action.get("value", "")
+            button_value = action.get("value", "")
             break
+    # Prefer the channel's live binding — a restore may have rebound this
+    # channel to a new window since this toolbar was posted.
+    window_id = thread_router.effective_window_id(channel_id, button_value)
     if not action_id or not window_id:
         return
 

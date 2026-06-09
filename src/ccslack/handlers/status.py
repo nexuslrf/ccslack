@@ -299,11 +299,14 @@ def register(app) -> None:  # noqa: ANN001
 
         if not is_authorized(user_id, channel_id):
             return
-        window_id = ""
+        button_value = ""
         for action in body.get("actions", []) or []:
             if action.get("action_id") == "ccslack_archive":
-                window_id = action.get("value", "")
+                button_value = action.get("value", "")
                 break
+        # Prefer the channel's live binding — a restore may have rebound this
+        # channel to a new window, and archive must target the current one.
+        window_id = thread_router.effective_window_id(channel_id, button_value)
         if not window_id or not channel_id:
             return
         # Lazy: kill_window pulls libtmux at call time; same module

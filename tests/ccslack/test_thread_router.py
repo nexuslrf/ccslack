@@ -28,6 +28,19 @@ def test_bind_records_channel_and_display_name(router: ThreadRouter) -> None:
     assert router.has_window("@0") is True
 
 
+def test_effective_window_id_prefers_binding_over_fallback(
+    router: ThreadRouter,
+) -> None:
+    router.bind_channel("C123", "@9", window_name="api")
+    # Stale button value (@1) is ignored in favour of the live binding.
+    assert router.effective_window_id("C123", "@1") == "@9"
+
+
+def test_effective_window_id_uses_fallback_when_unbound(router: ThreadRouter) -> None:
+    assert router.effective_window_id("C404", "@1") == "@1"
+    assert router.effective_window_id("C404") == ""
+
+
 def test_rebind_evicts_old_binding(router: ThreadRouter) -> None:
     router.bind_channel("C111", "@0")
     router.bind_channel("C222", "@0")
