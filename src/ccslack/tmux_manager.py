@@ -89,6 +89,13 @@ _TmuxError = (
 
 _EXTERNAL_DISCOVERY_TTL = 10.0  # seconds — cache external session discovery
 
+# Foreground commands that mean the pane is sitting at an interactive shell
+# (i.e. the agent CLI has exited). Used by interrupt_agent_to_shell() to tell
+# "the task was interrupted but the REPL is still up" from "the agent quit".
+_SHELL_COMMANDS: frozenset[str] = frozenset(
+    {"bash", "zsh", "fish", "sh", "dash", "ksh", "tcsh", "csh", "ash"}
+)
+
 
 @dataclass
 class PaneInfo:
@@ -262,6 +269,54 @@ class TmuxManager:
             if window.window_id == window_id:
                 return window
         return None
+
+    async def is_at_shell(self, window_id: str) -> bool:
+        """Return True when the window's active pane is at an interactive shell.
+
+        A False result means an agent CLI (or some other foreground process) is
+        still running in the pane.
+        """
+        window = await self.find_window_by_id(window_id)
+        if window is None:
+            return False
+        return (window.pane_current_command or "").lower() in _SHELL_COMMANDS
+
+    async def interrupt_agent_to_shell(
+        self,
+        window_id: str,
+        *,
+        max_attempts: int = 5,
+        settle: float = 0.8,
+    ) -> bool:
+        """Send Ctrl-C repeatedly until the pane returns to a shell prompt.
+
+        A single Ctrl-C only interrupts the agent's *current task* — Claude and
+        Codex keep their REPL up and need a further Ctrl-C (the "press again to
+        quit" confirmation) to actually exit. Sending one Ctrl-C and assuming
+        the shell is back means a follow-up command gets typed into the agent
+        instead of the shell.
+
+        This presses Ctrl-C, waits ``settle`` seconds for the process to react,
+        and re-checks the pane's foreground command, repeating up to
+        ``max_attempts`` times. Returns True once the pane is at a shell (or was
+        already), False if the agent never exited or the window died.
+        """
+        for attempt in range(1, max_attempts + 1):
+            if await self.is_at_shell(window_id):
+                return True
+            sent = await self.send_keys(
+                window_id, "C-c", literal=False, enter=False
+            )
+            if not sent and await self.find_window_by_id(window_id) is None:
+                return False  # window died mid-interrupt
+            await asyncio.sleep(settle)
+            logger.debug(
+                "interrupt_agent_to_shell: window %s attempt %d/%d",
+                window_id,
+                attempt,
+                max_attempts,
+            )
+        return await self.is_at_shell(window_id)
 
     async def _find_foreign_window(self, qualified_id: str) -> TmuxWindow | None:
         """Check if a foreign tmux window exists and return TmuxWindow."""

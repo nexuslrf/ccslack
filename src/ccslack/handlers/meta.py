@@ -1331,7 +1331,6 @@ async def _handle_yolo(
 
 def register_yolo_actions(app) -> None:  # noqa: ANN001
     """Wire the YOLO confirm / cancel button actions."""
-    import asyncio
 
     @app.action("ccslack_yolo_confirm")
     async def on_yolo_confirm(ack, body, client) -> None:  # noqa: ANN001
@@ -1377,9 +1376,24 @@ def register_yolo_actions(app) -> None:  # noqa: ANN001
             f"{launch_cmd} {continue_args}".strip() if continue_args else launch_cmd
         )
 
-        # Interrupt the current agent process.
-        await tmux_manager.send_keys(window_id, "C-c", literal=False, enter=False)
-        await asyncio.sleep(1.5)
+        # Exit the current agent process. A single Ctrl-C only interrupts the
+        # running task — Claude/Codex keep their REPL up and need another
+        # Ctrl-C to quit — so press until the pane is actually back at a shell.
+        # Otherwise the launch command below would be typed into the agent.
+        exited = await tmux_manager.interrupt_agent_to_shell(window_id)
+        if not exited:
+            if message_ts and channel_id:
+                await client.chat_update(
+                    channel=channel_id,
+                    ts=message_ts,
+                    text=(
+                        f":warning: Couldn't exit the running `{provider}` "
+                        "session (it ignored repeated Ctrl-C). YOLO restart "
+                        "aborted — try `/ccslack kill` then `/ccslack restore`."
+                    ),
+                    blocks=[],
+                )
+            return
         # Relaunch with YOLO + continue flags in the same tmux window.
         await tmux_manager.send_keys(window_id, full_cmd, literal=False, enter=True)
 
