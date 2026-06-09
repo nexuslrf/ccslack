@@ -37,17 +37,23 @@ async def test_already_at_shell_sends_no_ctrl_c(monkeypatch):
     fake = _FakePane(exit_after=0)
     tm = _wire(monkeypatch, fake)
 
-    assert await tm.interrupt_agent_to_shell("@1", settle=0) is True
+    assert await tm.interrupt_agent_to_shell("@1", settle=0, burst_gap=0) is True
     assert fake.sent == []
 
 
 @pytest.mark.asyncio
-async def test_exits_after_second_ctrl_c(monkeypatch):
-    fake = _FakePane(exit_after=2)
+async def test_exits_after_rapid_burst(monkeypatch):
+    # Claude needs three rapid presses (interrupt -> exit hint -> exit); a
+    # single burst should deliver them and reach the shell on the next check.
+    fake = _FakePane(exit_after=3)
     tm = _wire(monkeypatch, fake)
 
-    assert await tm.interrupt_agent_to_shell("@1", settle=0) is True
-    assert fake.sent == ["C-c", "C-c"]
+    assert (
+        await tm.interrupt_agent_to_shell("@1", settle=0, burst=3, burst_gap=0)
+        is True
+    )
+    assert fake.sent == ["C-c", "C-c", "C-c"]
+    assert fake.presses >= 3
 
 
 @pytest.mark.asyncio
@@ -55,9 +61,12 @@ async def test_returns_false_when_agent_never_exits(monkeypatch):
     fake = _FakePane(exit_after=999)
     tm = _wire(monkeypatch, fake)
 
-    result = await tm.interrupt_agent_to_shell("@1", max_attempts=3, settle=0)
+    result = await tm.interrupt_agent_to_shell(
+        "@1", max_attempts=2, settle=0, burst=3, burst_gap=0
+    )
     assert result is False
-    assert fake.sent == ["C-c", "C-c", "C-c"]
+    # 2 attempts x 3 presses each.
+    assert fake.sent == ["C-c"] * 6
 
 
 @pytest.mark.asyncio
@@ -73,7 +82,9 @@ async def test_returns_false_when_window_dies(monkeypatch):
     monkeypatch.setattr(tm, "find_window_by_id", _find_none)
     monkeypatch.setattr(tm, "send_keys", _send_false)
 
-    assert await tm.interrupt_agent_to_shell("@1", settle=0) is False
+    assert (
+        await tm.interrupt_agent_to_shell("@1", settle=0, burst_gap=0) is False
+    )
 
 
 @pytest.mark.asyncio

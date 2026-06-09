@@ -285,36 +285,47 @@ class TmuxManager:
         self,
         window_id: str,
         *,
-        max_attempts: int = 5,
-        settle: float = 0.8,
+        max_attempts: int = 4,
+        settle: float = 0.7,
+        burst: int = 3,
+        burst_gap: float = 0.15,
     ) -> bool:
-        """Send Ctrl-C repeatedly until the pane returns to a shell prompt.
+        """Send bursts of Ctrl-C until the pane returns to a shell prompt.
 
         A single Ctrl-C only interrupts the agent's *current task* — Claude and
-        Codex keep their REPL up and need a further Ctrl-C (the "press again to
-        quit" confirmation) to actually exit. Sending one Ctrl-C and assuming
-        the shell is back means a follow-up command gets typed into the agent
-        instead of the shell.
+        Codex keep their REPL up and need further Ctrl-C presses to exit.
+        Crucially, Claude's "press Ctrl-C again to exit" confirmation times out
+        after about a second, and with a running task it takes three presses
+        (interrupt → exit hint → exit). So the presses must land in *quick
+        succession*: re-checking the pane (a ``list_windows`` call) between each
+        press spaces them too far apart and the confirmation keeps expiring,
+        which is why a single Ctrl-C, or one-press-then-check, never quits
+        Claude.
 
-        This presses Ctrl-C, waits ``settle`` seconds for the process to react,
-        and re-checks the pane's foreground command, repeating up to
-        ``max_attempts`` times. Returns True once the pane is at a shell (or was
-        already), False if the agent never exited or the window died.
+        Each attempt fires ``burst`` Ctrl-C presses ``burst_gap`` seconds apart
+        with no check in between, then waits ``settle`` and re-checks the pane's
+        foreground command, repeating up to ``max_attempts`` times. Extra
+        presses after the agent has already exited land harmlessly on the shell.
+        Returns True once the pane is at a shell (or was already), False if the
+        agent never exited or the window died.
         """
         for attempt in range(1, max_attempts + 1):
             if await self.is_at_shell(window_id):
                 return True
-            sent = await self.send_keys(
-                window_id, "C-c", literal=False, enter=False
-            )
-            if not sent and await self.find_window_by_id(window_id) is None:
-                return False  # window died mid-interrupt
+            for _ in range(burst):
+                sent = await self.send_keys(
+                    window_id, "C-c", literal=False, enter=False
+                )
+                if not sent and await self.find_window_by_id(window_id) is None:
+                    return False  # window died mid-interrupt
+                await asyncio.sleep(burst_gap)
             await asyncio.sleep(settle)
             logger.debug(
-                "interrupt_agent_to_shell: window %s attempt %d/%d",
+                "interrupt_agent_to_shell: window %s attempt %d/%d (burst=%d)",
                 window_id,
                 attempt,
                 max_attempts,
+                burst,
             )
         return await self.is_at_shell(window_id)
 
