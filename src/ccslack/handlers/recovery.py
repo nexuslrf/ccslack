@@ -18,6 +18,7 @@ and writes the new ``WindowState`` / ``channel_bindings``.
 from __future__ import annotations
 
 import contextlib
+import os
 import structlog
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -90,6 +91,18 @@ def _build_launch_args(window_id: str, mode: RestoreMode) -> str:
     if view is None:
         return ""
     return _build_launch_args_for(view.provider_name, view.session_id or "", mode)
+
+
+def _same_cwd(a: str, b: str) -> bool:
+    """True when two paths point at the same directory (lexically normalized).
+
+    Empty operands never match — a missing cwd is "unknown", not "equal". Used
+    to detect when a window's remembered/live cwd disagrees with the channel
+    topic (the canonical session cwd) after tmux recycled a window id.
+    """
+    if not a or not b:
+        return False
+    return os.path.normpath(a) == os.path.normpath(b)
 
 
 def parse_channel_topic(topic: str) -> tuple[str, str] | None:
@@ -336,35 +349,48 @@ async def restore_window(
 ) -> str | None:
     """Respawn a dead *bound* window's agent and rebind the channel.
 
-    Thin wrapper over :func:`restore_in_channel` that reads the dead window's
-    remembered provider / cwd / session id. Used by the recovery banner
-    buttons, ``/ccslack restore`` (bound case), and startup auto-recovery.
+    Thin wrapper over :func:`restore_in_channel` that derives the channel's
+    provider / cwd / session id. Used by the recovery banner buttons,
+    ``/ccslack restore`` (bound case), and startup auto-recovery.
 
-    When the in-memory window state has lost its cwd (e.g. after the startup
-    prune ran before this fix was deployed), falls back to reading provider +
-    cwd from the channel topic — the same recovery path used for unbound
-    channels.
+    The channel topic (``"<provider> · <cwd>"``) is written once at channel
+    creation and never mutated, so it is the canonical record of what this
+    channel is for. ``window_state.cwd`` can silently drift when tmux recycles
+    a window id onto an unrelated window after a restart, so whenever the topic
+    is readable it overrides the remembered cwd/provider. The remembered
+    session id is kept only when its cwd still matches the topic — a recycled
+    binding carries a session that belongs to a different directory.
     """
     view = session_manager.view_window(window_id)
-    provider = (view.provider_name if view else "") or config.provider_name
-    cwd = (view.cwd if view else "") or ""
+    state_provider = (view.provider_name if view else "") or ""
+    state_cwd = (view.cwd if view else "") or ""
     session_id = (view.session_id if view else "") or ""
 
-    if not cwd:
-        logger.info(
-            "restore: cwd missing for window %s, falling back to channel topic",
+    provider = state_provider or config.provider_name
+    cwd = state_cwd
+
+    context = await recover_channel_context(client, channel_id)
+    if context is not None:
+        topic_provider, topic_cwd = context
+        if not _same_cwd(topic_cwd, state_cwd):
+            logger.warning(
+                "restore: window %s state cwd %r disagrees with channel topic "
+                "%r — using topic (recycled tmux id?); dropping stale session id",
+                window_id,
+                state_cwd,
+                topic_cwd,
+            )
+            session_id = ""
+        provider = topic_provider or provider
+        cwd = topic_cwd or cwd
+        if mode == "resume" and not session_id:
+            session_id = _latest_session_id_for(provider, cwd)
+    elif not cwd:
+        logger.warning(
+            "restore: no remembered cwd and topic unreadable for window %s",
             window_id,
         )
-        context = await recover_channel_context(client, channel_id)
-        if context is None:
-            logger.warning(
-                "restore: no remembered cwd and topic unreadable for window %s",
-                window_id,
-            )
-            return None
-        provider, cwd = context
-        if mode == "resume":
-            session_id = _latest_session_id_for(provider, cwd)
+        return None
 
     return await restore_in_channel(
         client,
@@ -539,6 +565,7 @@ def _extract_window_id(body: dict[str, Any], action_id: str) -> str:
 
 __all__ = [
     "RestoreMode",
+    "_same_cwd",
     "parse_channel_topic",
     "post_recovery_banner",
     "recover_channel_context",

@@ -3,6 +3,7 @@ import pytest
 from ccslack.handlers.recovery import (
     _build_launch_args,
     _build_launch_args_for,
+    _same_cwd,
     _slug_from_cwd,
     parse_channel_topic,
     recover_channel_context,
@@ -181,3 +182,71 @@ async def test_restore_window_returns_none_when_topic_also_missing(
     result = await restore_window(client, "C0NOTOPIC", "@56", mode="continue")
 
     assert result is None
+
+
+def test_same_cwd_normalizes_and_rejects_empty():
+    assert _same_cwd("/a/b", "/a/b/") is True
+    assert _same_cwd("/a/b/../b", "/a/b") is True
+    assert _same_cwd("/a/b", "/a/c") is False
+    assert _same_cwd("", "/a/b") is False
+    assert _same_cwd("/a/b", "") is False
+
+
+@pytest.mark.asyncio
+async def test_restore_window_topic_overrides_drifted_state_cwd(
+    monkeypatch, _clean_state
+):
+    thread_router.bind_channel("C0DRIFT", "@60", window_name="proj")
+    session_manager.set_window_provider("@60", "claude", cwd="/wrong/path")
+    window_store.get_window_state("@60").session_id = CLAUDE_ID
+
+    client = FakeSlackClient()
+    client.returns["conversations_info"] = {
+        "ok": True,
+        "channel": {"topic": {"value": "codex · /right/path"}},
+    }
+
+    spawned = []
+
+    async def _fake_restore_in_channel(c, ch, *, provider, cwd, session_id, **kw):
+        spawned.append((provider, cwd, session_id))
+        return "@260"
+
+    monkeypatch.setattr(
+        "ccslack.handlers.recovery.restore_in_channel", _fake_restore_in_channel
+    )
+
+    result = await restore_window(client, "C0DRIFT", "@60", mode="resume")
+
+    assert result == "@260"
+    assert spawned == [("codex", "/right/path", "")]
+
+
+@pytest.mark.asyncio
+async def test_restore_window_keeps_session_id_when_topic_cwd_matches(
+    monkeypatch, _clean_state
+):
+    thread_router.bind_channel("C0KEEP", "@61", window_name="proj")
+    session_manager.set_window_provider("@61", "claude", cwd="/same/path")
+    window_store.get_window_state("@61").session_id = CLAUDE_ID
+
+    client = FakeSlackClient()
+    client.returns["conversations_info"] = {
+        "ok": True,
+        "channel": {"topic": {"value": "claude · /same/path"}},
+    }
+
+    spawned = []
+
+    async def _fake_restore_in_channel(c, ch, *, provider, cwd, session_id, **kw):
+        spawned.append((provider, cwd, session_id))
+        return "@261"
+
+    monkeypatch.setattr(
+        "ccslack.handlers.recovery.restore_in_channel", _fake_restore_in_channel
+    )
+
+    result = await restore_window(client, "C0KEEP", "@61", mode="resume")
+
+    assert result == "@261"
+    assert spawned == [("claude", "/same/path", CLAUDE_ID)]
