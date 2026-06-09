@@ -120,6 +120,11 @@ class Config:
             os.getenv("CCSLACK_SLASH_COMMAND", "/ccslack")
         )
 
+        # Prefix for auto-created Slack channel names ("<prefix>-<cwd-slug>").
+        # Set to an empty string to drop the prefix entirely. Sanitized to
+        # Slack-legal characters where it is applied.
+        self.channel_prefix: str = os.getenv("CCSLACK_CHANNEL_PREFIX", "ccslack")
+
         # Tmux session name and window naming
         self.tmux_session_name = os.getenv(
             "CCSLACK_TMUX_SESSION", os.getenv("TMUX_SESSION_NAME", "ccslack")

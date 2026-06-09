@@ -58,8 +58,14 @@ def _sanitize_channel_name(raw: str) -> str:
 
 
 def _channel_name_for(cwd: Path) -> str:
-    """Default channel name from a session's cwd."""
-    return f"ccslack-{_sanitize_channel_name(cwd.name)}"
+    """Default channel name from a session's cwd.
+
+    Prefixed with ``config.channel_prefix`` (``CCSLACK_CHANNEL_PREFIX``,
+    default ``ccslack``). An empty prefix yields just the cwd slug.
+    """
+    slug = _sanitize_channel_name(cwd.name)
+    prefix = _sanitize_channel_name(config.channel_prefix) if config.channel_prefix else ""
+    return f"{prefix}-{slug}" if prefix else slug
 
 
 async def _post_ephemeral(client_method, **kwargs: Any) -> None:

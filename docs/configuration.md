@@ -25,6 +25,7 @@ override env vars where applicable.
 | Variable | Default | Description |
 |---|---|---|
 | `CCSLACK_SLASH_COMMAND` | `/ccslack` | The slash command name ccslack listens for. Set this if `/ccslack` collides with another app in your workspace. Validation: leading `/`, ≤32 chars, `[a-z0-9_-]`. |
+| `CCSLACK_CHANNEL_PREFIX` | `ccslack` | Prefix for auto-created channel names: `<prefix>-<cwd-slug>`. Sanitized to Slack-legal characters. Set to empty to use just the cwd slug (e.g. `vrender` instead of `ccslack-vrender`). |
 
 ### Storage + tmux
 
