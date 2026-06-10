@@ -68,6 +68,68 @@ def _channel_name_for(cwd: Path) -> str:
     return f"{prefix}-{slug}" if prefix else slug
 
 
+# Slack channel names: ≤80 chars. How many distinct names to probe before
+# giving up when each is already taken (live OR archived channels both reserve
+# the name, so a same-cwd session needs to walk past prior channels).
+_CHANNEL_NAME_MAX_LEN = 80
+_CHANNEL_NAME_MAX_TRIES = 30
+
+
+def _suffixed_channel_name(base: str, suffix: str | int) -> str:
+    """``base`` with ``-<suffix>`` appended, trimmed to Slack's length cap."""
+    tail = f"-{suffix}"
+    trimmed = base[: _CHANNEL_NAME_MAX_LEN - len(tail)].rstrip("-_")
+    return f"{trimmed}{tail}"
+
+
+def _channel_name_candidates(base: str, window_id: str) -> list[str]:
+    """Ordered, de-duplicated channel-name candidates for a new session.
+
+    Two sessions on the same cwd produce the same base name, and archived
+    channels keep their names reserved, so a single name often isn't enough.
+    Tries the bare name first, then the window id, then ``-2``, ``-3`` … so a
+    free name is found even when several prior channels exist for the cwd.
+    """
+    candidates = [base[:_CHANNEL_NAME_MAX_LEN]]
+    wid = window_id.lstrip("@")
+    if wid:
+        candidates.append(_suffixed_channel_name(base, wid))
+    candidates.extend(
+        _suffixed_channel_name(base, i) for i in range(2, _CHANNEL_NAME_MAX_TRIES + 1)
+    )
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for name in candidates:
+        if name and name not in seen:
+            seen.add(name)
+            ordered.append(name)
+    return ordered
+
+
+async def _create_unique_channel(
+    bolt_client,  # noqa: ANN001 — BoltSlackClient
+    base: str,
+    window_id: str,
+) -> tuple[str | None, str]:
+    """Create a private channel, walking past ``name_taken`` collisions.
+
+    Returns ``(channel_id, "")`` on success or ``(None, error)`` when every
+    candidate is taken or Slack returns a non-``name_taken`` error.
+    """
+    last_error = "name_taken"
+    for name in _channel_name_candidates(base, window_id):
+        try:
+            result = await bolt_client.conversations_create(name=name, is_private=True)
+            return result["channel"]["id"], ""
+        except SlackApiError as exc:
+            last_error = (exc.response.get("error") if exc.response else "") or str(exc)
+            if last_error != "name_taken":
+                logger.exception("conversations_create failed for %s", name)
+                return None, last_error
+            logger.info("channel name %s taken; trying next candidate", name)
+    return None, last_error
+
+
 async def _post_ephemeral(client_method, **kwargs: Any) -> None:
     """Best-effort ephemeral reply; ignored if Slack rejects the call."""
     try:
@@ -459,44 +521,29 @@ async def _handle_new(
         )
         return
 
-    # Create the private channel.
+    # Create the private channel, walking past name_taken collisions (a second
+    # session on the same cwd, or prior archived channels, reserve the name).
     channel_slug = _channel_name_for(work_dir)
     bolt_client = BoltSlackClient(client)
-    try:
-        result = await bolt_client.conversations_create(
-            name=channel_slug, is_private=True
+    new_channel, create_error = await _create_unique_channel(
+        bolt_client, channel_slug, window_id
+    )
+    if new_channel is None:
+        await tmux_manager.kill_window(window_id)
+        hint = (
+            " (all candidate names are taken — archive an old "
+            f"`{channel_slug}*` channel or set a different "
+            "`CCSLACK_CHANNEL_PREFIX`)"
+            if create_error == "name_taken"
+            else ""
         )
-        new_channel = result["channel"]["id"]
-    except SlackApiError as exc:
-        # Slack returns name_taken if the channel already exists; append a suffix.
-        error = exc.response.get("error") if exc.response else str(exc)
-        if error == "name_taken":
-            alt = f"{channel_slug}-{window_id.lstrip('@')}"
-            try:
-                result = await bolt_client.conversations_create(
-                    name=alt, is_private=True
-                )
-                new_channel = result["channel"]["id"]
-            except SlackApiError as exc2:
-                logger.exception("conversations_create retry failed")
-                await tmux_manager.kill_window(window_id)
-                await _post_ephemeral(
-                    client.chat_postEphemeral,
-                    channel=channel_id,
-                    user=user_id,
-                    text=f"ccslack: couldn't create channel: {exc2.response.get('error')}",
-                )
-                return
-        else:
-            logger.exception("conversations_create failed")
-            await tmux_manager.kill_window(window_id)
-            await _post_ephemeral(
-                client.chat_postEphemeral,
-                channel=channel_id,
-                user=user_id,
-                text=f"ccslack: couldn't create channel: {error}",
-            )
-            return
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack: couldn't create channel: {create_error}{hint}",
+        )
+        return
 
     # Invite the user (best-effort).
     try:
