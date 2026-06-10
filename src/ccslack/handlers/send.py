@@ -546,6 +546,18 @@ def register(app: AsyncApp) -> None:
         await ack()
         await _dispatch_browse(body, respond)
 
+    @app.action("ccslack_send_open")
+    async def on_open(ack, body, client) -> None:  # noqa: ANN001
+        # File button on the pinned status message — open the browser.
+        await ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel_id = body.get("channel", {}).get("id", "")
+        from .auth import is_authorized
+
+        if not is_authorized(user_id, channel_id) or not channel_id:
+            return
+        await handle_send(client, channel_id, user_id, "")
+
     @app.action("ccslack_send_all")
     async def on_all(ack, body, client) -> None:  # noqa: ANN001
         await ack()

@@ -143,6 +143,12 @@ def _build_blocks(
                 },
                 {
                     "type": "button",
+                    "action_id": "ccslack_send_open",
+                    "text": {"type": "plain_text", "text": ":outbox_tray: File"},
+                    "value": window_id,
+                },
+                {
+                    "type": "button",
                     "action_id": "ccslack_archive",
                     "style": "danger",
                     "text": {"type": "plain_text", "text": ":wastebasket: Archive"},
