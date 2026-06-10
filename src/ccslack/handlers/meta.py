@@ -234,7 +234,7 @@ def register(app: AsyncApp) -> None:
             return
 
         if sub == "yolo":
-            await _handle_yolo(client, channel_id, user_id)
+            await _handle_yolo(client, channel_id, user_id, args)
             return
 
         await _post_ephemeral(
@@ -263,8 +263,9 @@ def _help_text() -> str:
         "(after reboot / tmux restart).\n"
         f"• `{slash} panes` — list all tmux panes for this session.\n"
         f"• `{slash} rename <new-name>` — rename this session's Slack channel.\n"
-        f"• `{slash} yolo` — Ctrl-C the running agent and restart it with "
-        "approvals/sandbox skipped (claude/codex/gemini only).\n"
+        f"• `{slash} yolo [on|off]` — Ctrl-C the running agent and restart it "
+        "with approvals/sandbox skipped (`on`, default) or required again "
+        "(`off`) — claude/codex/gemini only.\n"
         f"• `{slash} send [path|glob|substring]` — upload file(s) from the "
         "session's cwd (e.g. `send docs/arch.png`, `send *.png`, `send arch`). "
         "With no argument, opens an interactive file browser.\n"
@@ -1237,16 +1238,51 @@ async def _handle_sessions(client, channel_id: str, user_id: str) -> None:  # no
     )
 
 
+# `/ccslack yolo [on|off]` argument aliases. Default (no arg) is "on".
+_YOLO_ON_ALIASES = frozenset({"", "on", "yolo", "skip"})
+_YOLO_OFF_ALIASES = frozenset({"off", "normal", "safe", "no"})
+
+
+def _yolo_launch_cmd(provider: str, target_mode: str, session_id: str) -> str:
+    """Build the relaunch command for switching *provider* to *target_mode*.
+
+    ``target_mode`` is ``"yolo"`` (skip-approvals flags) or ``"normal"``. The
+    provider's ``--continue`` args are appended so the restart resumes the same
+    conversation.
+    """
+    from .recovery import _build_launch_args_for
+
+    launch_cmd = resolve_launch_command(provider, approval_mode=target_mode)
+    continue_args = _build_launch_args_for(provider, session_id, "continue")
+    return f"{launch_cmd} {continue_args}".strip() if continue_args else launch_cmd
+
+
 async def _handle_yolo(
     client,  # noqa: ANN001
     channel_id: str,
     user_id: str,
+    args: list[str],
 ) -> None:
-    """``/ccslack yolo`` — interrupt the current agent and restart it in YOLO mode.
+    """``/ccslack yolo [on|off]`` — restart the agent in YOLO or normal mode.
 
-    Sends a confirm message in the channel. The actual Ctrl-C + relaunch happens
-    when the user clicks the confirm button (``ccslack_yolo_confirm`` action).
+    No arg / ``on`` switches to YOLO (skip-approvals); ``off`` / ``normal``
+    switches back to approvals-required. Sends a confirm message; the actual
+    Ctrl-C + relaunch happens on the ``ccslack_yolo_confirm`` button click.
     """
+    arg = args[0].lower() if args else ""
+    if arg in _YOLO_OFF_ALIASES:
+        target_mode = "normal"
+    elif arg in _YOLO_ON_ALIASES:
+        target_mode = "yolo"
+    else:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack: usage `{config.slash_command} yolo [on|off]`.",
+        )
+        return
+
     window_id = thread_router.get_window_for_channel(channel_id)
     if window_id is None:
         await _post_ephemeral(
@@ -1270,7 +1306,7 @@ async def _handle_yolo(
     view = session_manager.view_window(window_id)
     provider = (view.provider_name if view else "") or config.provider_name
 
-    if not has_yolo_mode(provider):
+    if target_mode == "yolo" and not has_yolo_mode(provider):
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
@@ -1279,36 +1315,44 @@ async def _handle_yolo(
         )
         return
 
-    # Intentionally NOT gated on view.approval_mode == "yolo": that flag is
-    # ccslack's persisted belief and drifts from reality whenever the agent is
-    # restarted outside this flow, so it can't be trusted to mean the live
-    # process is actually in YOLO. The action is explicit and confirmed below,
-    # and re-running it is an idempotent restart, so always offer it.
+    # Intentionally NOT gated on view.approval_mode: that flag is ccslack's
+    # persisted belief and drifts from reality whenever the agent is restarted
+    # outside this flow, so it can't be trusted. The action is explicit and
+    # confirmed below, and re-running it is an idempotent restart.
 
     # Build the command preview so the user can see exactly what will run.
-    from .recovery import _build_launch_args_for
-
-    launch_cmd = resolve_launch_command(provider, approval_mode="yolo")
-    continue_args = _build_launch_args_for(
-        provider, (view.session_id or "") if view else "", "continue"
+    full_cmd = _yolo_launch_cmd(
+        provider, target_mode, (view.session_id or "") if view else ""
     )
-    full_cmd = f"{launch_cmd} {continue_args}".strip() if continue_args else launch_cmd
+
+    if target_mode == "yolo":
+        header = (
+            f":warning: *Switch to YOLO mode?*\n"
+            f"This will `Ctrl-C` the running `{provider}` process and restart it "
+            f"as:\n```{full_cmd}```\n"
+            "The agent will run with approvals/sandbox skipped."
+        )
+        fallback = f":warning: Switch `{provider}` to YOLO mode?"
+        confirm_text = ":zap: Confirm YOLO"
+        confirm_style = "danger"
+    else:
+        header = (
+            f":lock: *Switch back to normal mode?*\n"
+            f"This will `Ctrl-C` the running `{provider}` process and restart it "
+            f"as:\n```{full_cmd}```\n"
+            "The agent will require approvals again."
+        )
+        fallback = f":lock: Switch `{provider}` to normal mode?"
+        confirm_text = ":lock: Confirm normal"
+        confirm_style = "primary"
 
     await client.chat_postMessage(
         channel=channel_id,
-        text=f":warning: Switch `{provider}` to YOLO mode?",
+        text=fallback,
         blocks=[
             {
                 "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        f":warning: *Switch to YOLO mode?*\n"
-                        f"This will `Ctrl-C` the running `{provider}` process and"
-                        f" restart it as:\n```{full_cmd}```\n"
-                        "The agent will run with approvals/sandbox skipped."
-                    ),
-                },
+                "text": {"type": "mrkdwn", "text": header},
             },
             {
                 "type": "actions",
@@ -1317,9 +1361,11 @@ async def _handle_yolo(
                     {
                         "type": "button",
                         "action_id": "ccslack_yolo_confirm",
-                        "style": "danger",
-                        "text": {"type": "plain_text", "text": ":zap: Confirm YOLO"},
-                        "value": window_id,
+                        "style": confirm_style,
+                        "text": {"type": "plain_text", "text": confirm_text},
+                        # Value encodes the target mode so the confirm handler
+                        # knows which way to switch.
+                        "value": f"{window_id}|{target_mode}",
                     },
                     {
                         "type": "button",
@@ -1348,11 +1394,14 @@ def register_yolo_actions(app) -> None:  # noqa: ANN001
         if not is_authorized(user_id, channel_id):
             return
 
-        window_id = ""
+        raw_value = ""
         for action in body.get("actions", []) or []:
             if action.get("action_id") == "ccslack_yolo_confirm":
-                window_id = action.get("value", "")
+                raw_value = action.get("value", "")
                 break
+        # Value is "<window_id>|<target_mode>"; older messages carry just the id.
+        window_id, _, mode_part = raw_value.partition("|")
+        target_mode = "normal" if mode_part == "normal" else "yolo"
         if not window_id:
             return
 
@@ -1362,22 +1411,17 @@ def register_yolo_actions(app) -> None:  # noqa: ANN001
                 await client.chat_update(
                     channel=channel_id,
                     ts=message_ts,
-                    text="ccslack: window died before YOLO restart.",
+                    text="ccslack: window died before the mode switch.",
                     blocks=[],
                 )
             return
 
         view = session_manager.view_window(window_id)
         provider = (view.provider_name if view else "") or config.provider_name
+        mode_label = "YOLO" if target_mode == "yolo" else "normal"
 
-        from .recovery import _build_launch_args_for
-
-        launch_cmd = resolve_launch_command(provider, approval_mode="yolo")
-        continue_args = _build_launch_args_for(
-            provider, (view.session_id or "") if view else "", "continue"
-        )
-        full_cmd = (
-            f"{launch_cmd} {continue_args}".strip() if continue_args else launch_cmd
+        full_cmd = _yolo_launch_cmd(
+            provider, target_mode, (view.session_id or "") if view else ""
         )
 
         # Exit the current agent process. A single Ctrl-C only interrupts the
@@ -1392,29 +1436,32 @@ def register_yolo_actions(app) -> None:  # noqa: ANN001
                     ts=message_ts,
                     text=(
                         f":warning: Couldn't exit the running `{provider}` "
-                        "session (it ignored repeated Ctrl-C). YOLO restart "
-                        "aborted — try `/ccslack kill` then `/ccslack restore`."
+                        f"session (it ignored repeated Ctrl-C). {mode_label} "
+                        "switch aborted — try `/ccslack kill` then "
+                        "`/ccslack restore`."
                     ),
                     blocks=[],
                 )
             return
-        # Relaunch with YOLO + continue flags in the same tmux window.
+        # Relaunch with the target mode + continue flags in the same tmux window.
         await tmux_manager.send_keys(window_id, full_cmd, literal=False, enter=True)
 
-        session_manager.set_window_approval_mode(window_id, "yolo")
+        session_manager.set_window_approval_mode(window_id, target_mode)
 
         if message_ts and channel_id:
+            badge = ":zap:" if target_mode == "yolo" else ":lock:"
+            verb = "activated" if target_mode == "yolo" else "restored"
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,
                 text=(
-                    f":zap: *YOLO mode activated* — restarted `{provider}` as "
-                    f"`{full_cmd}`."
+                    f"{badge} *{mode_label} mode {verb}* — restarted "
+                    f"`{provider}` as `{full_cmd}`."
                 ),
                 blocks=[],
             )
 
-        # Refresh the pinned status message to show the YOLO badge.
+        # Refresh the pinned status message to reflect the new mode.
         # Lazy: status helpers pull session_manager.
         from .status import update_status
 
@@ -1430,7 +1477,7 @@ def register_yolo_actions(app) -> None:  # noqa: ANN001
             await client.chat_update(
                 channel=channel_id,
                 ts=message_ts,
-                text=":x: YOLO restart cancelled.",
+                text=":x: Mode switch cancelled.",
                 blocks=[],
             )
 

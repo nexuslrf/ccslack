@@ -36,7 +36,7 @@ async def test_yolo_posts_confirm_message_for_claude(monkeypatch):
         _live,
     )
 
-    await _handle_yolo(client, "C0Y1", "U1")
+    await _handle_yolo(client, "C0Y1", "U1", [])
 
     msg = client.last_call("chat_postMessage")
     assert msg is not None
@@ -60,7 +60,7 @@ async def test_yolo_posts_confirm_message_for_codex(monkeypatch):
         _live,
     )
 
-    await _handle_yolo(client, "C0Y2", "U1")
+    await _handle_yolo(client, "C0Y2", "U1", [])
 
     msg = client.last_call("chat_postMessage")
     assert msg is not None
@@ -72,7 +72,7 @@ async def test_yolo_posts_confirm_message_for_codex(monkeypatch):
 async def test_yolo_rejects_unbound_channel():
     client = FakeSlackClient()
 
-    await _handle_yolo(client, "C0UNBOUND", "U1")
+    await _handle_yolo(client, "C0UNBOUND", "U1", [])
 
     assert client.call_count("chat_postMessage") == 0
     eph = client.last_call("chat_postEphemeral")
@@ -93,7 +93,7 @@ async def test_yolo_rejects_dead_window(monkeypatch):
         _dead,
     )
 
-    await _handle_yolo(client, "C0Y3", "U1")
+    await _handle_yolo(client, "C0Y3", "U1", [])
 
     assert client.call_count("chat_postMessage") == 0
     eph = client.last_call("chat_postEphemeral")
@@ -113,7 +113,7 @@ async def test_yolo_rejects_unsupported_provider(monkeypatch):
         _live,
     )
 
-    await _handle_yolo(client, "C0Y4", "U1")
+    await _handle_yolo(client, "C0Y4", "U1", [])
 
     assert client.call_count("chat_postMessage") == 0
     eph = client.last_call("chat_postEphemeral")
@@ -137,9 +137,77 @@ async def test_yolo_allows_reyolo_when_flag_already_set(monkeypatch):
         _live,
     )
 
-    await _handle_yolo(client, "C0Y5", "U1")
+    await _handle_yolo(client, "C0Y5", "U1", [])
 
     assert client.call_count("chat_postEphemeral") == 0
     msg = client.last_call("chat_postMessage")
     assert msg is not None
     assert "YOLO" in msg.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_yolo_off_posts_normal_confirm(monkeypatch):
+    _bind("C0Y6", "@15", provider="claude")
+    session_manager.set_window_approval_mode("@15", "yolo")
+    client = FakeSlackClient()
+
+    async def _live(wid):
+        return object()
+
+    monkeypatch.setattr(
+        "ccslack.handlers.meta.tmux_manager.find_window_by_id",
+        _live,
+    )
+
+    await _handle_yolo(client, "C0Y6", "U1", ["off"])
+
+    msg = client.last_call("chat_postMessage")
+    assert msg is not None
+    assert "normal" in msg.kwargs["text"]
+    blocks_text = str(msg.kwargs.get("blocks", ""))
+    # Normal relaunch must NOT carry the skip-approvals flag, but keeps continue.
+    assert "--dangerously-skip-permissions" not in blocks_text
+    assert "--continue" in blocks_text
+    assert "ccslack_yolo_confirm" in blocks_text
+    assert "@15|normal" in blocks_text
+
+
+@pytest.mark.asyncio
+async def test_yolo_off_works_even_without_yolo_capable_provider(monkeypatch):
+    # Switching *to* normal must not require YOLO capability.
+    _bind("C0Y7", "@16", provider="shell")
+    client = FakeSlackClient()
+
+    async def _live(wid):
+        return object()
+
+    monkeypatch.setattr(
+        "ccslack.handlers.meta.tmux_manager.find_window_by_id",
+        _live,
+    )
+
+    await _handle_yolo(client, "C0Y7", "U1", ["off"])
+
+    assert client.call_count("chat_postEphemeral") == 0
+    assert client.last_call("chat_postMessage") is not None
+
+
+@pytest.mark.asyncio
+async def test_yolo_rejects_unknown_arg(monkeypatch):
+    _bind("C0Y8", "@17", provider="claude")
+    client = FakeSlackClient()
+
+    async def _live(wid):
+        return object()
+
+    monkeypatch.setattr(
+        "ccslack.handlers.meta.tmux_manager.find_window_by_id",
+        _live,
+    )
+
+    await _handle_yolo(client, "C0Y8", "U1", ["maybe"])
+
+    assert client.call_count("chat_postMessage") == 0
+    eph = client.last_call("chat_postEphemeral")
+    assert eph is not None
+    assert "usage" in eph.kwargs["text"]
