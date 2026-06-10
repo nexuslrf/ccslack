@@ -1,7 +1,10 @@
-"""`/ccslack send <path|glob|substring>` — upload file(s) from cwd to the channel.
+"""`/ccslack send [path|glob|substring]` — upload file(s) from cwd to the channel.
 
-Three modes in one command (ported from ccgram's ``/send``):
+Four modes in one command (ported from ccgram's ``/send``):
 
+  * **browser**      — ``/ccslack send`` (no arg) → an interactive file browser
+                       rooted at the session cwd: tap folders to navigate, tap a
+                       file to send it. Navigation stays contained to the cwd.
   * **exact path**   — ``/ccslack send docs/arch.png`` → upload that file.
   * **glob**         — ``/ccslack send *.png`` → fnmatch on filenames.
   * **substring**    — ``/ccslack send arch`` → case-insensitive filename search.
@@ -49,6 +52,9 @@ _UPLOAD_ALL_LIMIT = 10
 _MAX_PICKER_BUTTONS = 23
 # Max chars of a relative path shown on a picker button before truncation.
 _LABEL_MAX = 72
+# Max folder+file entries shown per browser page (Slack actions blocks hold ≤25
+# elements each; we chunk into blocks of 25).
+_MAX_BROWSE_ENTRIES = 40
 # Files at or above this size prompt a confirm button before uploading; smaller
 # files upload straight away. There is no hard upper cap — the confirm step is
 # the only gate for large files.
@@ -149,17 +155,7 @@ async def handle_send(
     user_id: str,
     raw_path: str,
 ) -> None:
-    """``/ccslack send <path|glob|substring>`` body."""
-    if not raw_path:
-        await _ephemeral(
-            client,
-            channel_id,
-            user_id,
-            "ccslack: usage `/ccslack send <path|glob|substring>` — e.g. "
-            "`send docs/arch.png`, `send *.png`, `send arch`.",
-        )
-        return
-
+    """``/ccslack send [path|glob|substring]`` body. No arg → file browser."""
     cwd = _resolve_cwd(channel_id)
     if cwd is None:
         await _ephemeral(
@@ -168,6 +164,11 @@ async def handle_send(
             user_id,
             "ccslack: not a session channel (or no remembered cwd).",
         )
+        return
+
+    # No argument → open the interactive file browser at the session cwd.
+    if not raw_path:
+        await _post_browser(client, channel_id, user_id, cwd, cwd)
         return
 
     # An exact, existing file path (absolute, or relative to cwd) is uploaded
@@ -387,6 +388,136 @@ async def _post_size_confirm(
     )
 
 
+# ── Interactive file browser ────────────────────────────────────────────────
+
+
+def _within(path: Path, root: Path) -> bool:
+    """True when *path* is *root* or lives beneath it (after resolving)."""
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _list_dir(browse_dir: Path) -> tuple[list[Path], list[Path]]:
+    """Return (subdirs, files) under *browse_dir*, hidden entries dropped.
+
+    Dirs are sorted alphabetically; files newest-first so a just-produced file
+    surfaces at the top. Hidden (dot) entries are skipped — they are noise and
+    hidden files are refused by ``validate_sendable`` anyway.
+    """
+    dirs: list[Path] = []
+    files: list[Path] = []
+    for entry in browse_dir.iterdir():
+        if entry.name.startswith("."):
+            continue
+        try:
+            if entry.is_dir():
+                dirs.append(entry)
+            elif entry.is_file():
+                files.append(entry)
+        except OSError:
+            continue
+    dirs.sort(key=lambda p: p.name.lower())
+    files.sort(key=_safe_mtime, reverse=True)
+    return dirs, files
+
+
+def _build_browser_view(browse_dir: Path, cwd: Path) -> tuple[list[dict[str, Any]], str]:
+    """Build the (blocks, fallback_text) for a browser page at *browse_dir*.
+
+    Navigation is contained to *cwd*: a target outside it (or non-directory)
+    resets to the cwd root. Folder buttons re-enter the browser; file buttons
+    reuse the ``ccslack_send_pick`` upload path.
+    """
+    cwd = cwd.resolve()
+    try:
+        browse_dir = browse_dir.resolve()
+    except OSError:
+        browse_dir = cwd
+    if browse_dir != cwd and not _within(browse_dir, cwd):
+        browse_dir = cwd
+    if not browse_dir.is_dir():
+        browse_dir = cwd
+
+    try:
+        dirs, files = _list_dir(browse_dir)
+    except OSError as exc:
+        text = f"ccslack: can't read `{browse_dir}` — {exc}"
+        return [{"type": "section", "text": {"type": "mrkdwn", "text": text}}], text
+
+    entries = dirs + files
+    shown = entries[:_MAX_BROWSE_ENTRIES]
+
+    buttons: list[dict[str, Any]] = []
+    if browse_dir != cwd:
+        buttons.append(
+            {
+                "type": "button",
+                "action_id": "ccslack_send_browse:up",
+                "text": {"type": "plain_text", "text": ":arrow_up_small: .."},
+                "value": str(browse_dir.parent),
+            }
+        )
+    for idx, entry in enumerate(shown):
+        # entries == dirs + files, so the first len(dirs) positions are folders.
+        if idx < len(dirs):
+            label = f"{entry.name}/"
+            label = label if len(label) <= _LABEL_MAX else label[: _LABEL_MAX - 1] + "…"
+            buttons.append(
+                {
+                    "type": "button",
+                    "action_id": f"ccslack_send_browse:{idx}",
+                    "text": {"type": "plain_text", "text": f":file_folder: {label}"[:75]},
+                    "value": str(entry),
+                }
+            )
+        else:
+            emoji = ":frame_with_picture:" if _is_image(entry) else ":page_facing_up:"
+            name = entry.name
+            label = name if len(name) <= _LABEL_MAX else "…" + name[-(_LABEL_MAX - 1) :]
+            buttons.append(
+                {
+                    "type": "button",
+                    "action_id": f"ccslack_send_pick:{idx}",
+                    "text": {"type": "plain_text", "text": f"{emoji} {label}"[:75]},
+                    "value": str(entry),
+                }
+            )
+
+    rel = _safe_relative(browse_dir, cwd)
+    location = cwd.name if rel == "." else f"{cwd.name}/{rel}"
+    header = (
+        f":open_file_folder: *{location}* — {len(dirs)} folder(s), {len(files)} file(s)."
+        + (f" Showing first {len(shown)}." if len(entries) > len(shown) else "")
+        + "\nTap a folder to open it, or a file to send it."
+    )
+    blocks: list[dict[str, Any]] = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": header}}
+    ]
+    if not entries:
+        blocks.append(
+            {"type": "section", "text": {"type": "mrkdwn", "text": "_(empty folder)_"}}
+        )
+    for i in range(0, len(buttons), 25):
+        blocks.append({"type": "actions", "elements": buttons[i : i + 25]})
+
+    return blocks, f"Browse {location}"
+
+
+async def _post_browser(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    browse_dir: Path,
+    cwd: Path,
+) -> None:
+    """Post the file browser as a fresh ephemeral (initial open)."""
+    blocks, text = _build_browser_view(browse_dir, cwd)
+    await _ephemeral(client, channel_id, user_id, text, blocks=blocks)
+
+
 def register(app: AsyncApp) -> None:
     """Wire the send picker action handlers."""
     import re as _re
@@ -395,6 +526,11 @@ def register(app: AsyncApp) -> None:
     async def on_pick(ack, body, client) -> None:  # noqa: ANN001
         await ack()
         await _dispatch_pick(body, client)
+
+    @app.action(_re.compile(r"^ccslack_send_browse:.+$"))
+    async def on_browse(ack, body, respond) -> None:  # noqa: ANN001
+        await ack()
+        await _dispatch_browse(body, respond)
 
     @app.action("ccslack_send_all")
     async def on_all(ack, body, client) -> None:  # noqa: ANN001
@@ -435,6 +571,19 @@ async def _dispatch_pick(body: dict[str, Any], client) -> None:  # noqa: ANN001
     if not path:
         return
     await _upload_one(client, channel_id, user_id, Path(path), cwd)
+
+
+async def _dispatch_browse(body: dict[str, Any], respond) -> None:  # noqa: ANN001
+    """Navigate the browser in place by replacing the ephemeral (response_url)."""
+    _user_id, channel_id, cwd = _action_ctx(body)
+    if cwd is None:
+        return
+    target = _picked_value(body, "ccslack_send_browse:")
+    if not target:
+        return
+    blocks, text = _build_browser_view(Path(target), cwd)
+    # replace_original swaps the existing ephemeral so navigation doesn't stack.
+    await respond(text=text, blocks=blocks, replace_original=True)
 
 
 async def _dispatch_confirm(body: dict[str, Any], client) -> None:  # noqa: ANN001
