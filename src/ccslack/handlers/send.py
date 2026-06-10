@@ -503,6 +503,20 @@ def _build_browser_view(browse_dir: Path, cwd: Path) -> tuple[list[dict[str, Any
     for i in range(0, len(buttons), 25):
         blocks.append({"type": "actions", "elements": buttons[i : i + 25]})
 
+    blocks.append(
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": "ccslack_send_cancel",
+                    "text": {"type": "plain_text", "text": ":x: Close"},
+                    "value": "cancel",
+                }
+            ],
+        }
+    )
+
     return blocks, f"Browse {location}"
 
 
@@ -543,9 +557,11 @@ def register(app: AsyncApp) -> None:
         await _dispatch_confirm(body, client)
 
     @app.action("ccslack_send_cancel")
-    async def on_cancel(ack, _body, _client) -> None:  # noqa: ANN001
-        # Just acknowledge; the ephemeral confirm vanishes for the clicker.
+    async def on_cancel(ack, respond) -> None:  # noqa: ANN001
+        # Dismiss the ephemeral (browser or size-confirm) for the clicker.
         await ack()
+        with contextlib.suppress(SlackApiError):
+            await respond(delete_original=True)
 
 
 def _action_ctx(body: dict[str, Any]) -> tuple[str, str, Path | None]:

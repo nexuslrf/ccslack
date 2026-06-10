@@ -93,10 +93,15 @@ def test_browser_contains_navigation_to_cwd(tree: Path):
     assert "ccslack_send_browse:up" not in _action_ids(blocks)
 
 
-def test_empty_folder_renders_without_buttons(tree: Path):
+def test_empty_folder_renders_without_entry_buttons(tree: Path):
     blocks, _ = _build_browser_view(tree / "src", tree)
-    assert _action_ids(blocks) == ["ccslack_send_browse:up"]
+    assert _action_ids(blocks) == ["ccslack_send_browse:up", "ccslack_send_cancel"]
     assert any("empty folder" in str(b) for b in blocks)
+
+
+def test_browser_always_has_close_button(tree: Path):
+    blocks, _ = _build_browser_view(tree, tree)
+    assert "ccslack_send_cancel" in _action_ids(blocks)
 
 
 @pytest.mark.asyncio
