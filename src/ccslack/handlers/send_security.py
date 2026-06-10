@@ -11,6 +11,7 @@ Key function: validate_sendable(path, cwd) -> str | None
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 import stat
 import subprocess
@@ -63,10 +64,21 @@ _EXCLUDED_DIRS: frozenset[str] = frozenset(
 # above CCSLACK confirm threshold so a huge upload is never silent.
 
 
+def _lexical(path: Path) -> Path:
+    """Absolute, normalised path WITHOUT resolving symlinks.
+
+    Containment is checked lexically so that a symlink living *under* the cwd
+    (projects intentionally link in data/output dirs) counts as in-bounds. ``..``
+    is still collapsed by ``normpath``, so directory-traversal escapes are blocked
+    — only symlink *targets* are left unfollowed.
+    """
+    return Path(os.path.normpath(os.path.abspath(path)))
+
+
 def is_path_contained(path: Path, root: Path) -> bool:
-    """Return True if *path* resolves to a location within *root*."""
+    """Return True if *path* is lexically within *root* (symlinks not followed)."""
     try:
-        return path.resolve().is_relative_to(root.resolve())
+        return _lexical(path).is_relative_to(_lexical(root))
     except OSError, ValueError:
         return False
 
@@ -74,7 +86,7 @@ def is_path_contained(path: Path, root: Path) -> bool:
 def is_hidden(path: Path, root: Path) -> bool:
     """Return True if any path component relative to *root* starts with '.'."""
     try:
-        rel = path.resolve().relative_to(root.resolve())
+        rel = _lexical(path).relative_to(_lexical(root))
     except OSError, ValueError:
         return False
     return any(part.startswith(".") for part in rel.parts)
@@ -212,7 +224,7 @@ def _check_size_and_type(path: Path) -> str | None:
     return None
 
 
-def validate_sendable(path: Path, cwd: Path) -> str | None:
+def validate_sendable(path: Path, cwd: Path, *, allow_outside: bool = False) -> str | None:
     """Run the full security pipeline for *path* relative to *cwd*.
 
     Returns a human-readable error string on the first failed check, or None
@@ -226,17 +238,22 @@ def validate_sendable(path: Path, cwd: Path) -> str | None:
     5. State-file protection (assert_sendable from utils)
     6. Gitleaks rule match
 
+    ``allow_outside`` (granted only to meta-authorized users by the caller)
+    skips the containment + hidden-component checks so a privileged user can
+    retrieve a file from anywhere. The secret-pattern, regular-file, and
+    gitleaks guards still apply.
+
     NOTE: gitignore membership is intentionally NOT a deny rule. Build
     artifacts, logs, datasets, and model checkpoints are routinely
     gitignored yet legitimately worth sending. Secrets are still blocked by
     the hidden-file, secret-pattern, and gitleaks checks above — those don't
     depend on a file being tracked by git.
     """
-    if not is_path_contained(path, cwd):
-        return "File is outside project directory"
-
-    if is_hidden(path, cwd):
-        return "Hidden files cannot be sent"
+    if not allow_outside:
+        if not is_path_contained(path, cwd):
+            return "File is outside project directory"
+        if is_hidden(path, cwd):
+            return "Hidden files cannot be sent"
 
     pattern = matches_secret_pattern(path)
     if pattern is not None:

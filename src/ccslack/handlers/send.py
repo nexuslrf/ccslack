@@ -17,10 +17,15 @@ before uploading.
 
 Security: every upload — direct, picked, or bulk — passes the full
 ``send_security.validate_sendable`` stack (path containment, hidden files,
-secret patterns, gitleaks rules). There is no hard upper size limit; large
-files are gated by the confirm button instead. Gitignored files are *allowed*
-(build artifacts, logs, datasets are commonly gitignored yet worth sending;
-secrets are still caught by the hidden-file / secret-pattern / gitleaks checks).
+secret patterns, gitleaks rules). Containment is *lexical*, so symlinked
+directories that live under the cwd are navigable/sendable (their targets are
+not followed for the containment test). Meta-authorized users (the global
+allow-list) may retrieve files from *outside* the cwd — the browser roots at
+the filesystem and the containment check is skipped for them; the
+secret-pattern and gitleaks guards still apply. There is no hard upper size
+limit; large files are gated by the confirm button instead. Gitignored files
+are *allowed* (build artifacts, logs, datasets are commonly gitignored yet
+worth sending).
 """
 
 from __future__ import annotations
@@ -76,11 +81,16 @@ def _safe_mtime(p: Path) -> float:
         return 0.0
 
 
+def _lex(path: Path) -> Path:
+    """Absolute, normalised path without resolving symlinks (see send_security)."""
+    return Path(os.path.normpath(os.path.abspath(path)))
+
+
 def _safe_relative(path: Path, cwd: Path) -> str:
     try:
-        return str(path.resolve().relative_to(cwd.resolve()))
+        return str(_lex(path).relative_to(_lex(cwd)))
     except ValueError, OSError:
-        return str(path)
+        return str(_lex(path))
 
 
 def _walk_filtered(cwd: Path, depth_limit: int) -> list[Path]:
@@ -166,9 +176,16 @@ async def handle_send(
         )
         return
 
+    # Meta-authorized users may retrieve files from outside the session cwd.
+    from .auth import is_meta_authorized
+
+    allow_outside = is_meta_authorized(user_id)
+
     # No argument → open the interactive file browser at the session cwd.
     if not raw_path:
-        await _post_browser(client, channel_id, user_id, cwd, cwd)
+        await _post_browser(
+            client, channel_id, user_id, cwd, cwd, allow_outside=allow_outside
+        )
         return
 
     # An exact, existing file path (absolute, or relative to cwd) is uploaded
@@ -181,7 +198,9 @@ async def handle_send(
     if not candidate.is_absolute():
         candidate = cwd / candidate
     if not is_pattern and candidate.is_file():
-        await _upload_one(client, channel_id, user_id, candidate, cwd)
+        await _upload_one(
+            client, channel_id, user_id, candidate, cwd, allow_outside=allow_outside
+        )
         return
 
     matches = _find_files(cwd, raw_path)
@@ -215,15 +234,21 @@ async def _upload_one(
     cwd: Path,
     *,
     confirmed: bool = False,
+    allow_outside: bool = False,
 ) -> bool:
     """Validate + upload a single file. Returns success.
 
     For files at or above ``_CONFIRM_THRESHOLD_BYTES`` and not yet
     ``confirmed``, posts an ephemeral confirm button instead of uploading and
     returns False (the click re-enters here with ``confirmed=True``).
+
+    ``allow_outside`` (meta-authorized users only) relaxes the cwd-containment
+    check so a file from anywhere can be retrieved.
     """
     try:
-        resolved = resolved.resolve()
+        # Lexical, not resolve(): keep symlink paths as-is so a symlink under
+        # the cwd stays in-bounds (validate_sendable contains lexically too).
+        resolved = _lex(resolved)
     except OSError as exc:
         await _ephemeral(client, channel_id, user_id, f"ccslack: bad path: {exc}")
         return False
@@ -233,7 +258,7 @@ async def _upload_one(
         )
         return False
 
-    reason = validate_sendable(resolved, cwd)
+    reason = validate_sendable(resolved, cwd, allow_outside=allow_outside)
     if reason:
         await _ephemeral(client, channel_id, user_id, f"ccslack: refused — {reason}")
         return False
@@ -392,10 +417,9 @@ async def _post_size_confirm(
 
 
 def _within(path: Path, root: Path) -> bool:
-    """True when *path* is *root* or lives beneath it (after resolving)."""
+    """True when *path* is *root* or lexically beneath it (symlinks not followed)."""
     try:
-        path.resolve().relative_to(root.resolve())
-        return True
+        return _lex(path).is_relative_to(_lex(root))
     except (ValueError, OSError):
         return False
 
@@ -424,22 +448,35 @@ def _list_dir(browse_dir: Path) -> tuple[list[Path], list[Path]]:
     return dirs, files
 
 
-def _build_browser_view(browse_dir: Path, cwd: Path) -> tuple[list[dict[str, Any]], str]:
+def _browser_location(browse_dir: Path, cwd: Path) -> str:
+    """Display label for *browse_dir*: cwd-relative, or absolute when outside."""
+    rel = _safe_relative(browse_dir, cwd)
+    if rel.startswith(os.sep):  # outside the cwd — show the absolute path
+        return rel
+    if rel == ".":
+        return cwd.name or os.sep
+    return f"{cwd.name}/{rel}"
+
+
+def _build_browser_view(
+    browse_dir: Path, cwd: Path, *, allow_outside: bool = False
+) -> tuple[list[dict[str, Any]], str]:
     """Build the (blocks, fallback_text) for a browser page at *browse_dir*.
 
-    Navigation is contained to *cwd*: a target outside it (or non-directory)
-    resets to the cwd root. Folder buttons re-enter the browser; file buttons
-    reuse the ``ccslack_send_pick`` upload path.
+    Navigation is contained to *cwd* (a target outside it, or a non-directory,
+    resets to the root). Symlinked directories under the cwd are navigable
+    (containment is lexical). When ``allow_outside`` is set (meta-authorized
+    user) the root becomes the filesystem root, so the browser can leave the
+    cwd. Folder buttons re-enter the browser; file buttons reuse the
+    ``ccslack_send_pick`` upload path.
     """
-    cwd = cwd.resolve()
-    try:
-        browse_dir = browse_dir.resolve()
-    except OSError:
-        browse_dir = cwd
-    if browse_dir != cwd and not _within(browse_dir, cwd):
-        browse_dir = cwd
+    cwd = _lex(cwd)
+    browse_dir = _lex(browse_dir)
+    root = Path(browse_dir.anchor or os.sep) if allow_outside else cwd
+    if browse_dir != root and not _within(browse_dir, root):
+        browse_dir = root
     if not browse_dir.is_dir():
-        browse_dir = cwd
+        browse_dir = root
 
     try:
         dirs, files = _list_dir(browse_dir)
@@ -451,7 +488,7 @@ def _build_browser_view(browse_dir: Path, cwd: Path) -> tuple[list[dict[str, Any
     shown = entries[:_MAX_BROWSE_ENTRIES]
 
     buttons: list[dict[str, Any]] = []
-    if browse_dir != cwd:
+    if browse_dir != root:
         buttons.append(
             {
                 "type": "button",
@@ -486,8 +523,7 @@ def _build_browser_view(browse_dir: Path, cwd: Path) -> tuple[list[dict[str, Any
                 }
             )
 
-    rel = _safe_relative(browse_dir, cwd)
-    location = cwd.name if rel == "." else f"{cwd.name}/{rel}"
+    location = _browser_location(browse_dir, cwd)
     header = (
         f":open_file_folder: *{location}* — {len(dirs)} folder(s), {len(files)} file(s)."
         + (f" Showing first {len(shown)}." if len(entries) > len(shown) else "")
@@ -526,9 +562,11 @@ async def _post_browser(
     user_id: str,
     browse_dir: Path,
     cwd: Path,
+    *,
+    allow_outside: bool = False,
 ) -> None:
     """Post the file browser as a fresh ephemeral (initial open)."""
-    blocks, text = _build_browser_view(browse_dir, cwd)
+    blocks, text = _build_browser_view(browse_dir, cwd, allow_outside=allow_outside)
     await _ephemeral(client, channel_id, user_id, text, blocks=blocks)
 
 
@@ -576,57 +614,68 @@ def register(app: AsyncApp) -> None:
             await respond(delete_original=True)
 
 
-def _action_ctx(body: dict[str, Any]) -> tuple[str, str, Path | None]:
-    """Common (user_id, channel_id, cwd) extraction + auth for action handlers.
+def _action_ctx(body: dict[str, Any]) -> tuple[str, str, Path | None, bool]:
+    """Common (user_id, channel_id, cwd, allow_outside) + auth for action handlers.
 
-    Returns ``(user_id, channel_id, cwd)``; ``cwd`` is None when the click is
-    unauthorized or the channel has no resolvable cwd (callers should bail).
+    ``cwd`` is None when the click is unauthorized or the channel has no
+    resolvable cwd (callers should bail). ``allow_outside`` is True for
+    meta-authorized users (may retrieve files from outside the cwd).
     """
     user_id = body.get("user", {}).get("id", "")
     channel_id = body.get("channel", {}).get("id", "")
-    from .auth import is_authorized
+    from .auth import is_authorized, is_meta_authorized
 
     if not is_authorized(user_id, channel_id) or not channel_id:
-        return user_id, channel_id, None
-    return user_id, channel_id, _resolve_cwd(channel_id)
+        return user_id, channel_id, None, False
+    return user_id, channel_id, _resolve_cwd(channel_id), is_meta_authorized(user_id)
 
 
 async def _dispatch_pick(body: dict[str, Any], client) -> None:  # noqa: ANN001
-    user_id, channel_id, cwd = _action_ctx(body)
+    user_id, channel_id, cwd, allow_outside = _action_ctx(body)
     if cwd is None:
         return
     path = _picked_value(body, "ccslack_send_pick:")
     if not path:
         return
-    await _upload_one(client, channel_id, user_id, Path(path), cwd)
+    await _upload_one(
+        client, channel_id, user_id, Path(path), cwd, allow_outside=allow_outside
+    )
 
 
 async def _dispatch_browse(body: dict[str, Any], respond) -> None:  # noqa: ANN001
     """Navigate the browser in place by replacing the ephemeral (response_url)."""
-    _user_id, channel_id, cwd = _action_ctx(body)
+    _user_id, channel_id, cwd, allow_outside = _action_ctx(body)
     if cwd is None:
         return
     target = _picked_value(body, "ccslack_send_browse:")
     if not target:
         return
-    blocks, text = _build_browser_view(Path(target), cwd)
+    blocks, text = _build_browser_view(Path(target), cwd, allow_outside=allow_outside)
     # replace_original swaps the existing ephemeral so navigation doesn't stack.
     await respond(text=text, blocks=blocks, replace_original=True)
 
 
 async def _dispatch_confirm(body: dict[str, Any], client) -> None:  # noqa: ANN001
-    user_id, channel_id, cwd = _action_ctx(body)
+    user_id, channel_id, cwd, allow_outside = _action_ctx(body)
     if cwd is None:
         return
     path = _picked_value(body, "ccslack_send_confirm:")
     if not path:
         return
     # confirmed=True bypasses the size gate; security re-validation still runs.
-    await _upload_one(client, channel_id, user_id, Path(path), cwd, confirmed=True)
+    await _upload_one(
+        client,
+        channel_id,
+        user_id,
+        Path(path),
+        cwd,
+        confirmed=True,
+        allow_outside=allow_outside,
+    )
 
 
 async def _dispatch_all(body: dict[str, Any], client) -> None:  # noqa: ANN001
-    user_id, channel_id, cwd = _action_ctx(body)
+    user_id, channel_id, cwd, allow_outside = _action_ctx(body)
     if cwd is None:
         return
     raw = _picked_value(body, "ccslack_send_all")
@@ -634,7 +683,15 @@ async def _dispatch_all(body: dict[str, Any], client) -> None:  # noqa: ANN001
     ok = 0
     for p in paths:
         # Bulk is an explicit opt-in, so skip the per-file size confirm.
-        if await _upload_one(client, channel_id, user_id, Path(p), cwd, confirmed=True):
+        if await _upload_one(
+            client,
+            channel_id,
+            user_id,
+            Path(p),
+            cwd,
+            confirmed=True,
+            allow_outside=allow_outside,
+        ):
             ok += 1
     if ok < len(paths):
         await _ephemeral(
