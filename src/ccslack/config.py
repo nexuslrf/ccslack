@@ -210,6 +210,14 @@ class Config:
             "CCSLACK_HIDE_TOOL_CALLS", "false"
         ).lower() in ("1", "true", "yes")
 
+        # When an agent answer contains a markdown table, offer a button to
+        # render it as an image (Slack renders markdown tables poorly). The raw
+        # text is always posted; this only controls the extra offer. Set
+        # CCSLACK_TABLE_RENDER=false to suppress the button entirely.
+        self.table_render_offer: bool = os.getenv(
+            "CCSLACK_TABLE_RENDER", "true"
+        ).lower() in ("1", "true", "yes")
+
         # Group an agent turn's tool_use / tool_result / thinking under one
         # threaded parent message in the main channel, so long tool chains
         # don't flood the channel. Plain answers + interactive prompts stay in

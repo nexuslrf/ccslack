@@ -190,6 +190,14 @@ async def _route_to_channel(
     decorated = _decorate(msg, text)
     await _post_or_pair(client, channel_id, msg, decorated, thread_ts=thread_ts)
 
+    # Offer to render any markdown table in a plain agent answer as an image
+    # (Slack renders tables poorly). The raw text is already posted above; this
+    # only adds an opt-in button. User echoes / tool flows are skipped.
+    if msg.role != "user" and msg.content_type == "text":
+        from ..table_render import maybe_offer_table_render
+
+        await maybe_offer_table_render(client, channel_id, text)
+
     # No-hooks turn-end signal: the agent's final answer closes the thread.
     # The Stop hook also calls end_turn (idempotent), so this is just a
     # backstop for providers / setups without hooks.
