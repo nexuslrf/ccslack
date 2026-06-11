@@ -1031,6 +1031,7 @@ async def _kill_one(client, channel_id: str, window_id: str) -> str:  # noqa: AN
     from .messaging_pipeline.turn_threads import clear_channel
 
     clear_channel(channel_id)
+    thread_router.clear_chat_threads(channel_id)
 
     try:
         await bolt_client.conversations_archive(channel=channel_id)

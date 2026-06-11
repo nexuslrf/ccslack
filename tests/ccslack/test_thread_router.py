@@ -59,10 +59,28 @@ def test_chat_thread_persists_roundtrip(router: ThreadRouter) -> None:
     assert other.is_chat_thread("C1", "100.2") is True
 
 
-def test_unbind_clears_chat_threads(router: ThreadRouter) -> None:
+def test_unbind_preserves_chat_threads(router: ThreadRouter) -> None:
+    # unbind is also used to rebind on restore/resume — the channel and its
+    # chat threads must survive. Only explicit teardown forgets them.
     router.bind_channel("C1", "@1")
     router.mark_chat_thread("C1", "100.1")
     router.unbind_channel("C1")
+    assert router.is_chat_thread("C1", "100.1") is True
+
+
+def test_chat_thread_survives_rebind(router: ThreadRouter) -> None:
+    # Simulate a restore: unbind the dead window, then bind a fresh one.
+    router.bind_channel("C1", "@1")
+    router.mark_chat_thread("C1", "100.1")
+    router.unbind_channel("C1")
+    router.bind_channel("C1", "@2")
+    assert router.is_chat_thread("C1", "100.1") is True
+
+
+def test_clear_chat_threads_forgets_on_teardown(router: ThreadRouter) -> None:
+    router.bind_channel("C1", "@1")
+    router.mark_chat_thread("C1", "100.1")
+    router.clear_chat_threads("C1")
     assert router.is_chat_thread("C1", "100.1") is False
 
 

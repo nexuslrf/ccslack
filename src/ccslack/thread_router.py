@@ -205,9 +205,10 @@ class ThreadRouter:
         if not still_bound and not self._has_window_state(window_id):
             self.window_display_names.pop(window_id, None)
 
-        # Chat-thread markers are channel-scoped; drop them with the binding.
-        self.chat_threads.pop(channel_id, None)
-
+        # NOTE: chat-thread markers are intentionally NOT dropped here. unbind
+        # is also used to rebind a channel to a new window (restore / resume),
+        # where the channel — and its chat threads — must survive. Genuine
+        # teardown (kill / archive / prune) calls clear_chat_threads() instead.
         self._schedule_save()
         return window_id
 
@@ -241,6 +242,15 @@ class ThreadRouter:
     def is_chat_thread(self, channel_id: str, thread_ts: str) -> bool:
         """True if *thread_ts* in *channel_id* is a human-only chat thread."""
         return thread_ts in self.chat_threads.get(channel_id, set())
+
+    def clear_chat_threads(self, channel_id: str) -> None:
+        """Forget a channel's chat threads — only on genuine teardown.
+
+        Called from the kill / archive / prune paths (alongside
+        ``turn_threads.clear_channel``), NOT from a restore/resume rebind.
+        """
+        if self.chat_threads.pop(channel_id, None) is not None:
+            self._schedule_save()
 
     def get_channel_for_window(self, window_id: str) -> str | None:
         """Reverse lookup: get channel_id for a window (O(1))."""

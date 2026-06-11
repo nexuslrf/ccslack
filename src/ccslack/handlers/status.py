@@ -332,6 +332,7 @@ def register(app) -> None:  # noqa: ANN001
         from .messaging_pipeline.turn_threads import clear_channel
 
         clear_channel(channel_id)
+        thread_router.clear_chat_threads(channel_id)
 
         # Best-effort: archive the channel.
         try:
