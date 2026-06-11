@@ -158,16 +158,21 @@ renames, so all bindings keep working.
 - If the target name is already taken Slack returns `name_taken` and the
   command reports it without changing anything.
 
-### `/ccslack send <path|glob|substring>`
+### `/ccslack send [path|glob|substring]`
 
 Upload file(s) — including images, which Slack previews inline — from the
-session's cwd to the channel. Three modes, auto-detected from the argument:
+session's cwd to the channel. Four modes, auto-detected from the argument:
 
 | Argument | Mode | Behaviour |
 |---|---|---|
-| `docs/arch.png` | exact path | Upload that file (relative to cwd; absolute paths must be inside cwd). |
+| *(none)* | **browser** | Opens an interactive file browser rooted at the cwd — tap a 📁 folder to descend, a file to send it, ✖ **Close** to dismiss. Navigation is contained to the cwd. |
+| `docs/arch.png` | exact path | Upload that file (relative to cwd; absolute paths must be inside cwd unless you're meta-authorized — see below). |
 | `*.png`, `report-??.csv` | glob | `fnmatch` over filenames in the cwd tree. |
 | `arch` | substring | Case-insensitive filename search in the cwd tree. |
+
+The browser can also be opened from the **📤 File** button on the pinned
+status message. It navigates in place (the ephemeral is replaced, not stacked)
+and pages at 40 entries per folder.
 
 For glob / substring: the cwd is walked (depth-capped by
 `CCSLACK_SEND_SEARCH_DEPTH`, excluded dirs like `node_modules` / `.venv`
@@ -184,8 +189,10 @@ explicit opt-in.)
 
 Security filters (all enforced on every upload — direct, picked, or bulk;
 deny-by-default):
-- Path containment (resolved path must stay inside cwd; blocks `../`
-  and symlink escapes)
+- Path containment — **lexical**: the path must sit under the cwd *by name*.
+  `../` traversal is blocked, but a **symlinked directory under the cwd is
+  followed** (projects intentionally link in data/output dirs), so it's
+  navigable in the browser and sendable.
 - Hidden files / directories (`.`-prefixed) denied
 - Secret-name patterns (`*.pem`, `*.key`, `*.env`, `*credential*`,
   `*secret*`, …)
@@ -198,8 +205,15 @@ deny-by-default):
 > Secrets remain blocked by the hidden-file, secret-pattern, and gitleaks
 > checks — those don't depend on a file being tracked by git.
 
+> **Outside the cwd (meta users).** Members of the global allow-list
+> (`ALLOWED_USERS`) may retrieve files from *anywhere*: the containment +
+> hidden checks are skipped for them and the browser roots at the filesystem,
+> so it can navigate above the cwd. The secret-pattern and gitleaks guards
+> still apply. Regular channel members stay confined to the cwd.
+
 - **Where**: a bound session channel.
-- **Auth**: channel membership (the picker buttons re-check on click).
+- **Auth**: channel membership (the picker buttons re-check on click);
+  outside-cwd access additionally requires `ALLOWED_USERS`.
 - **Tunables**: `CCSLACK_SEND_SEARCH_DEPTH` (5), `CCSLACK_SEND_MAX_RESULTS`
   (50) — see [configuration](configuration.md).
 
@@ -252,6 +266,38 @@ place — inside the thread.
 - **Where**: a bound session channel.
 - **Auth**: channel membership.
 
+### `/ccslack yolo [on|off]`
+
+Switch the **running** agent between normal and YOLO (skip-approvals) mode
+without losing context — distinct from `/ccslack new --yolo`, which only sets
+the mode at creation.
+
+| Form | Behaviour |
+|---|---|
+| `/ccslack yolo` / `yolo on` | Restart in YOLO (approvals/sandbox skipped). |
+| `/ccslack yolo off` (alias `normal`) | Restart with approvals required again. |
+
+Posts a confirm message; on click it Ctrl-C's the agent until the pane is
+back at a shell, then relaunches it with the target mode's launch flags plus
+`--continue` (so the conversation resumes). If the agent ignores repeated
+Ctrl-C the switch is aborted with a hint to `kill` + `restore`. Switching
+*to* YOLO needs a YOLO-capable provider (claude/codex/gemini); switching to
+normal works for any provider.
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
+### `/ccslack chat [topic]`
+
+Start a **human-only** thread for the team to talk in without typing into the
+agent. Posts a parent message (optionally seeded with `topic`) and marks its
+thread — any reply underneath is **not** forwarded to tmux. The marker is
+persisted, so it survives a bot restart. Messages outside the thread still
+reach the agent as usual.
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
 ### `/ccslack kill [target | --all --confirm]`
 
 Tear down sessions.
@@ -288,7 +334,12 @@ Each kill does (in order):
 |---|---|
 | 📷 **Screenshot** | Captures the visible viewport of the tmux pane, renders to PNG, uploads via `files.upload_v2`. Bounded size — focuses on most recent operations. |
 | 🎛️ **Toolbar** | Posts a separate Block Kit toolbar message with per-provider key buttons (see below). |
+| 📤 **File** | Opens the interactive file browser (same as a no-arg `/ccslack send`) as an ephemeral for the clicker. |
 | 🗑️ **Archive** | Confirm modal → kills the tmux window, unbinds the channel, archives the Slack channel. |
+
+These buttons resolve the target window from the channel's **current** binding
+(not the id baked into the message), so they keep working after a `/ccslack
+restore` rebinds the channel to a new tmux window.
 
 ### Toolbar (posted by 🎛️)
 
@@ -351,6 +402,28 @@ Appears in the channel within ~1 s of polling detecting a dead window.
 Fresh / Continue / Resume rebind the channel and re-post the status
 message; Archive removes everything.
 
+### File browser (posted by `/ccslack send` with no arg, or the 📤 File button)
+
+An ephemeral, in-place file browser rooted at the session cwd:
+
+- 📁 **folder** buttons descend into a directory (the ephemeral is replaced
+  via `response_url`, so navigation doesn't stack); ⬆️ **..** goes up.
+- file buttons (🖼️ images / 📄 otherwise) send that file through the same
+  upload + security path as `/ccslack send <path>`.
+- ✖ **Close** dismisses the browser.
+
+Contained to the cwd (symlinked dirs under it are followed); meta-authorized
+users can navigate above the cwd. See `/ccslack send` for the full security
+model.
+
+### Table-render offer (posted under an agent answer containing a table)
+
+Slack renders markdown tables poorly. When a plain agent answer contains a
+GitHub-flavored table, the raw text is posted unchanged and a follow-up prompt
+offers **🖼️ Render image** / **✖ Dismiss**. Render lays the table(s) out as an
+aligned box and uploads a PNG. Controlled globally by `CCSLACK_TABLE_RENDER`
+(default on) — see [configuration](configuration.md).
+
 ---
 
 ## CLI commands (run from your terminal)
@@ -381,9 +454,11 @@ invoke that form by hand.
 | Dashboard 🗑️ Kill button | `ALLOWED_USERS` |
 | `/ccslack kill --all`, kill by `<#channel>` / `C…` / `@N` | `ALLOWED_USERS` |
 | `/ccslack kill` (from session channel) | Channel membership |
-| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread` | Channel membership |
-| Inbound message → tmux | Channel membership |
-| Status-message buttons (Screenshot, Toolbar, Archive) | Channel membership |
+| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `yolo`, `chat` | Channel membership |
+| `/ccslack send` outside the cwd | `ALLOWED_USERS` (on top of channel membership) |
+| Inbound message → tmux | Channel membership (chat-thread replies are never forwarded) |
+| Status-message buttons (Screenshot, Toolbar, File, Archive) | Channel membership |
+| File-browser + table-render buttons | Channel membership |
 | Live picker buttons | Channel membership |
 | Recovery banner buttons | Channel membership |
 | Toolbar key buttons | Channel membership |
