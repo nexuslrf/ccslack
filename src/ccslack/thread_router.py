@@ -54,6 +54,9 @@ class ThreadRouter:
         self.window_display_names: dict[str, str] = {}
         # window_id → channel_id (reverse for O(1) inbound lookups).
         self._window_to_channel: dict[str, str] = {}
+        # channel_id → set of parent ts marked as human-only "chat" threads.
+        # Replies under these threads are NOT forwarded to tmux.
+        self.chat_threads: dict[str, set[str]] = {}
         self._schedule_save: Callable[[], None] = schedule_save
         self._has_window_state: Callable[[str], bool] = has_window_state
 
@@ -62,6 +65,7 @@ class ThreadRouter:
         self.channel_bindings.clear()
         self.window_display_names.clear()
         self._window_to_channel.clear()
+        self.chat_threads.clear()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -101,6 +105,11 @@ class ThreadRouter:
         return {
             "channel_bindings": dict(self.channel_bindings),
             "window_display_names": dict(self.window_display_names),
+            "chat_threads": {
+                channel_id: sorted(ts_set)
+                for channel_id, ts_set in self.chat_threads.items()
+                if ts_set
+            },
         }
 
     def from_dict(self, data: dict[str, Any]) -> None:
@@ -123,6 +132,15 @@ class ThreadRouter:
         else:
             self.channel_bindings = {}
         self.window_display_names = dict(data.get("window_display_names", {}))
+        raw_chat = data.get("chat_threads", {})
+        if isinstance(raw_chat, dict):
+            self.chat_threads = {
+                str(channel_id): {str(ts) for ts in ts_list}
+                for channel_id, ts_list in raw_chat.items()
+                if isinstance(ts_list, list) and ts_list
+            }
+        else:
+            self.chat_threads = {}
         self._dedup_channel_bindings()
         self._rebuild_reverse_index()
 
@@ -187,6 +205,9 @@ class ThreadRouter:
         if not still_bound and not self._has_window_state(window_id):
             self.window_display_names.pop(window_id, None)
 
+        # Chat-thread markers are channel-scoped; drop them with the binding.
+        self.chat_threads.pop(channel_id, None)
+
         self._schedule_save()
         return window_id
 
@@ -205,6 +226,21 @@ class ThreadRouter:
         longer bound.
         """
         return self.channel_bindings.get(channel_id) or fallback
+
+    # ------------------------------------------------------------------
+    # Chat threads (human-only side conversations)
+    # ------------------------------------------------------------------
+
+    def mark_chat_thread(self, channel_id: str, thread_ts: str) -> None:
+        """Mark a thread (by parent ts) as human-only — replies skip tmux."""
+        if not channel_id or not thread_ts:
+            return
+        self.chat_threads.setdefault(channel_id, set()).add(thread_ts)
+        self._schedule_save()
+
+    def is_chat_thread(self, channel_id: str, thread_ts: str) -> bool:
+        """True if *thread_ts* in *channel_id* is a human-only chat thread."""
+        return thread_ts in self.chat_threads.get(channel_id, set())
 
     def get_channel_for_window(self, window_id: str) -> str | None:
         """Reverse lookup: get channel_id for a window (O(1))."""

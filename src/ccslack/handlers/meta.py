@@ -186,6 +186,7 @@ def register(app: AsyncApp) -> None:
             "toolcalls",
             "thread",
             "yolo",
+            "chat",
             "help",
             "?",
             "-h",
@@ -239,6 +240,10 @@ def register(app: AsyncApp) -> None:
 
         if sub == "kill":
             await _handle_kill(client, channel_id, user_id, args)
+            return
+
+        if sub == "chat":
+            await _handle_chat(client, channel_id, user_id, args)
             return
 
         if sub == "mute":
@@ -342,6 +347,8 @@ def _help_text() -> str:
         "(meta channel only).\n"
         f"• `{slash} mute [all|errors|off]` — change/cycle notify mode for "
         "the current channel.\n"
+        f"• `{slash} chat [topic]` — start a human-only thread; replies in it "
+        "are not sent to the agent.\n"
         f"• `{slash} help` — this message."
     )
 
@@ -872,6 +879,48 @@ async def _handle_restore(
             user=user_id,
             text=f"ccslack restore ({mode}): re-adopt failed (check logs).",
         )
+
+
+async def _handle_chat(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    args: list[str],
+) -> None:
+    """``/ccslack chat [topic]`` — start a human-only thread (replies skip tmux).
+
+    Posts a parent message and marks its thread so replies underneath are NOT
+    forwarded to the agent — a side channel for the team to discuss without
+    typing into the session.
+    """
+    if thread_router.get_window_for_channel(channel_id) is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `chat` only works inside a bound session channel.",
+        )
+        return
+
+    topic = " ".join(args).strip()
+    header = (
+        ":speech_balloon: *Chat thread* — reply in this thread to talk with the "
+        "team. Messages here are *not* sent to the agent."
+    )
+    if topic:
+        header += f"\n>{topic}"
+
+    try:
+        result = await client.chat_postMessage(channel=channel_id, text=header)
+    except SlackApiError as exc:
+        logger.warning(
+            "chat: postMessage failed: %s",
+            exc.response.get("error") if exc.response else exc,
+        )
+        return
+    ts = result.get("ts") if hasattr(result, "get") else result["ts"]
+    if ts:
+        thread_router.mark_chat_thread(channel_id, ts)
 
 
 async def _handle_mute(

@@ -53,6 +53,12 @@ def register(app: AsyncApp) -> None:
         if window_id is None:
             return
 
+        # Replies inside a human-only "chat" thread (`/ccslack chat`) are a
+        # side conversation — never forwarded to the agent.
+        thread_ts = event.get("thread_ts", "")
+        if thread_ts and thread_router.is_chat_thread(channel_id, thread_ts):
+            return
+
         if not is_authorized(user_id, channel_id):
             await _react(client, channel_id, event.get("ts", ""), "no_entry_sign")
             return
