@@ -493,22 +493,50 @@ def _parse_input_item(
     return ([AgentMessage(text=content, role="user", content_type="text")], pending)
 
 
+# Reserved key stashed in the per-session ``pending`` carry to remember the
+# last assistant-text signature *across* incremental reads. Codex re-emits the
+# final answer up to three times (response_item ``message`` → ``agent_message``
+# event → ``task_complete.last_agent_message``); when an incremental poll splits
+# those copies across two batches, a per-batch dedup can't see the earlier copy.
+_LAST_TEXT_SIG_KEY = "__ccslack_last_text_sig__"
+
+
 def _append_unique_messages(
     dest: list[AgentMessage],
     candidates: list[AgentMessage],
     last_signature: tuple[str, str, str] | None,
-) -> tuple[str, str, str] | None:
-    """Append messages while dropping exact adjacent duplicates."""
+    last_text_sig: tuple[str, str, str] | None,
+) -> tuple[tuple[str, str, str] | None, tuple[str, str, str] | None]:
+    """Append messages, dropping codex's duplicate emissions.
+
+    Two layers:
+      * adjacent identical signatures within this batch (``current``);
+      * a repeat of the last assistant *answer* we already emitted
+        (``text_sig``) — even when non-adjacent or carried over from a prior
+        incremental read — so codex's agent_message / task_complete double-post
+        collapses to one. A ``user`` message resets the answer guard so a new
+        turn may legitimately repeat identical text.
+    """
     current = last_signature
+    text_sig = last_text_sig
     for message in candidates:
         signature = (message.role, message.content_type, message.text)
+        is_assistant_text = (
+            message.role == "assistant" and message.content_type == "text"
+        )
         if signature == current:
             if dest and _prefer_duplicate_message(dest[-1], message):
                 dest[-1] = message
             continue
+        if is_assistant_text and signature == text_sig:
+            continue  # already-emitted answer re-sent by codex (cross-read safe)
         dest.append(message)
         current = signature
-    return current
+        if is_assistant_text:
+            text_sig = signature
+        elif message.role == "user":
+            text_sig = None  # new human turn — allow an identical answer next
+    return current, text_sig
 
 
 def _prefer_duplicate_message(previous: AgentMessage, candidate: AgentMessage) -> bool:
@@ -646,6 +674,9 @@ class CodexProvider(JsonlProvider):
         messages: list[AgentMessage] = []
         pending = dict(pending_tools)
         last_signature: tuple[str, str, str] | None = None
+        # Survives across incremental reads via the pending carry so codex's
+        # final-answer double-post is caught even when polls split the copies.
+        text_sig = pending.pop(_LAST_TEXT_SIG_KEY, None)
 
         for entry in entries:
             entry_type = entry.get("type", "")
@@ -655,24 +686,25 @@ class CodexProvider(JsonlProvider):
 
             if entry_type == "response_item":
                 parsed, pending = _parse_codex_response_item(payload, pending)
-                last_signature = _append_unique_messages(
-                    messages, parsed, last_signature
+                last_signature, text_sig = _append_unique_messages(
+                    messages, parsed, last_signature, text_sig
                 )
                 continue
 
             if entry_type == "event_msg":
                 parsed, pending = _parse_event_message(payload, pending)
-                last_signature = _append_unique_messages(
-                    messages, parsed, last_signature
+                last_signature, text_sig = _append_unique_messages(
+                    messages, parsed, last_signature, text_sig
                 )
                 continue
 
             if entry_type == "input_item":
                 parsed, pending = _parse_input_item(payload, pending)
-                last_signature = _append_unique_messages(
-                    messages, parsed, last_signature
+                last_signature, text_sig = _append_unique_messages(
+                    messages, parsed, last_signature, text_sig
                 )
 
+        pending[_LAST_TEXT_SIG_KEY] = text_sig
         return messages, pending
 
     def is_user_transcript_entry(self, entry: dict[str, Any]) -> bool:
