@@ -142,6 +142,7 @@ def register(app: AsyncApp) -> None:
     """Wire the configured slash command (``config.slash_command``)."""
     register_dashboard_actions(app)
     register_yolo_actions(app)
+    register_join_actions(app)
 
     slash = config.slash_command
 
@@ -631,6 +632,110 @@ async def _handle_new(
         )
     except SlackApiError:
         logger.debug("welcome message post failed")
+
+    # Offer the other allowed users a one-click join to the new private channel.
+    await _post_join_offer(client, new_channel, user_id, provider, work_dir)
+
+
+async def _post_join_offer(
+    client,  # noqa: ANN001 — Bolt AsyncWebClient
+    new_channel: str,
+    creator_id: str,
+    provider: str,
+    work_dir: str,
+) -> None:
+    """Ask the *other* allowed users (in the meta channel) to join *new_channel*.
+
+    The new session channel is private, so other users can't see it until
+    invited. This posts a notice with a Join button in the meta channel; any
+    meta-authorized clicker is invited to the new channel. No-op when there are
+    no other allowed users or the feature is disabled.
+    """
+    if not config.join_offer:
+        return
+    others = sorted(config.allowed_users - {creator_id})
+    if not others:
+        return
+    mentions = " ".join(f"<@{uid}>" for uid in others)
+    try:
+        await client.chat_postMessage(
+            channel=config.meta_channel_id,
+            text=f"New ccslack session <#{new_channel}> — join?",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f":wave: <@{creator_id}> started a new session "
+                            f"<#{new_channel}> (`{provider}` · `{work_dir}`).\n"
+                            f"{mentions} — want to join?"
+                        ),
+                    },
+                },
+                {
+                    "type": "actions",
+                    "block_id": f"ccslack_join_actions:{new_channel}",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "action_id": "ccslack_join_session",
+                            "style": "primary",
+                            "text": {
+                                "type": "plain_text",
+                                "text": ":inbox_tray: Join session",
+                            },
+                            "value": new_channel,
+                        }
+                    ],
+                },
+            ],
+        )
+    except SlackApiError:
+        logger.debug("join-offer post failed")
+
+
+async def _do_join(
+    client,  # noqa: ANN001 — Bolt AsyncWebClient
+    user_id: str,
+    new_channel: str,
+) -> None:
+    """Invite *user_id* into *new_channel* and confirm via ephemeral (meta)."""
+    try:
+        await client.conversations_invite(channel=new_channel, users=user_id)
+        text = f":inbox_tray: Added you to <#{new_channel}>."
+    except SlackApiError as exc:
+        error = (exc.response.get("error") if exc.response else "") or str(exc)
+        if error in ("already_in_channel", "already_invited"):
+            text = f"You're already in <#{new_channel}>."
+        else:
+            logger.warning("join invite failed for %s: %s", user_id, error)
+            text = f"ccslack: couldn't add you to the session — `{error}`."
+    with contextlib.suppress(SlackApiError):
+        await client.chat_postEphemeral(
+            channel=config.meta_channel_id, user=user_id, text=text
+        )
+
+
+def register_join_actions(app) -> None:  # noqa: ANN001
+    """Wire the session join button (posted by `/ccslack new`)."""
+
+    @app.action("ccslack_join_session")
+    async def on_join(ack, body, client) -> None:  # noqa: ANN001
+        await ack()
+        user_id = body.get("user", {}).get("id", "")
+        from .auth import is_meta_authorized
+
+        if not is_meta_authorized(user_id):
+            return
+        new_channel = ""
+        for action in body.get("actions", []) or []:
+            if action.get("action_id") == "ccslack_join_session":
+                new_channel = action.get("value", "")
+                break
+        if not new_channel:
+            return
+        await _do_join(client, user_id, new_channel)
 
 
 async def _handle_list(client, channel_id: str, user_id: str) -> None:  # noqa: ANN001

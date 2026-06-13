@@ -27,6 +27,7 @@ override env vars where applicable.
 | `CCSLACK_SLASH_COMMAND` | `/ccslack` | The slash command name ccslack listens for. Set this if `/ccslack` collides with another app in your workspace. Validation: leading `/`, ≤32 chars, `[a-z0-9_-]`. |
 | `CCSLACK_CHANNEL_PREFIX` | `ccslack` | Prefix for auto-created channel names: `<prefix>-<cwd-slug>`. Sanitized to Slack-legal characters. Set to empty to use just the cwd slug (e.g. `vrender` instead of `ccslack-vrender`). |
 | `CCSLACK_TABLE_RENDER` | `true` | When an agent answer contains a markdown table, post a button offering to render it as an image (Slack renders markdown tables poorly). The raw text is always posted; set `false` to suppress the button. |
+| `CCSLACK_JOIN_OFFER` | `true` | After `/ccslack new` creates a session, post a notice in the meta channel with a **Join** button so the other `ALLOWED_USERS` can opt into the new private channel. Set `false` to skip it. |
 
 ### Storage + tmux
 

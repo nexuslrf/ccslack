@@ -201,30 +201,7 @@ class Config:
         self._init_live_view()
         self._init_send()
         self._init_lifecycle()
-
-        # Global default for hiding tool_use/tool_result content.
-        # Per-window override via WindowState.tool_call_visibility takes precedence.
-        # Default is *show* (matches ccgram) so users see the agent's tool chain
-        # right away; set CCSLACK_HIDE_TOOL_CALLS=true to opt back into quiet mode.
-        self.hide_tool_calls: bool = os.getenv(
-            "CCSLACK_HIDE_TOOL_CALLS", "false"
-        ).lower() in ("1", "true", "yes")
-
-        # When an agent answer contains a markdown table, offer a button to
-        # render it as an image (Slack renders markdown tables poorly). The raw
-        # text is always posted; this only controls the extra offer. Set
-        # CCSLACK_TABLE_RENDER=false to suppress the button entirely.
-        self.table_render_offer: bool = os.getenv(
-            "CCSLACK_TABLE_RENDER", "true"
-        ).lower() in ("1", "true", "yes")
-
-        # Group an agent turn's tool_use / tool_result / thinking under one
-        # threaded parent message in the main channel, so long tool chains
-        # don't flood the channel. Plain answers + interactive prompts stay in
-        # the main channel. Per-window override via /ccslack thread.
-        self.thread_tool_calls: bool = os.getenv(
-            "CCSLACK_THREAD_TOOL_CALLS", "true"
-        ).lower() in ("1", "true", "yes")
+        self._init_feature_flags()
 
         # Status display: green=active (system POV) or green=ready (user POV).
         raw_status_mode = os.getenv("CCSLACK_STATUS_MODE", "").strip().lower()
@@ -241,6 +218,38 @@ class Config:
             self.tmux_session_name,
             self.meta_channel_id,
         )
+
+    def _init_feature_flags(self) -> None:
+        # Global default for hiding tool_use/tool_result content.
+        # Per-window override via WindowState.tool_call_visibility takes precedence.
+        # Default is *show* (matches ccgram) so users see the agent's tool chain
+        # right away; set CCSLACK_HIDE_TOOL_CALLS=true to opt back into quiet mode.
+        self.hide_tool_calls: bool = os.getenv(
+            "CCSLACK_HIDE_TOOL_CALLS", "false"
+        ).lower() in ("1", "true", "yes")
+
+        # When an agent answer contains a markdown table, offer a button to
+        # render it as an image (Slack renders markdown tables poorly). The raw
+        # text is always posted; this only controls the extra offer. Set
+        # CCSLACK_TABLE_RENDER=false to suppress the button entirely.
+        self.table_render_offer: bool = os.getenv(
+            "CCSLACK_TABLE_RENDER", "true"
+        ).lower() in ("1", "true", "yes")
+
+        # After `/ccslack new` creates a session, post a join offer in the meta
+        # channel so other allowed users can opt into the new private channel.
+        # Set CCSLACK_JOIN_OFFER=false to skip it.
+        self.join_offer: bool = os.getenv(
+            "CCSLACK_JOIN_OFFER", "true"
+        ).lower() in ("1", "true", "yes")
+
+        # Group an agent turn's tool_use / tool_result / thinking under one
+        # threaded parent message in the main channel, so long tool chains
+        # don't flood the channel. Plain answers + interactive prompts stay in
+        # the main channel. Per-window override via /ccslack thread.
+        self.thread_tool_calls: bool = os.getenv(
+            "CCSLACK_THREAD_TOOL_CALLS", "true"
+        ).lower() in ("1", "true", "yes")
 
     def _init_messaging(self) -> None:
         self.msg_auto_spawn: bool = os.getenv("CCSLACK_MSG_AUTO_SPAWN", "").lower() in (

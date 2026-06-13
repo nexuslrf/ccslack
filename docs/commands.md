@@ -54,6 +54,11 @@ What happens on success:
 4. The channel topic + purpose carry the cwd and tmux window ID.
 5. A status message is posted and pinned.
 6. Welcome message + ephemeral confirmation in the meta channel.
+7. A **Join** notice is posted in the meta channel mentioning the *other*
+   `ALLOWED_USERS` — any of them can click **📥 Join session** to be invited
+   into the new private channel. Skipped when there are no other allowed
+   users, or when `CCSLACK_JOIN_OFFER=false` (see
+   [configuration](configuration.md)).
 
 ### `/ccslack list`
 
