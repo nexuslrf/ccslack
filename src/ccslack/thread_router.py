@@ -57,6 +57,9 @@ class ThreadRouter:
         # channel_id → set of parent ts marked as human-only "chat" threads.
         # Replies under these threads are NOT forwarded to tmux.
         self.chat_threads: dict[str, set[str]] = {}
+        # channel_id → set of user_ids granted access in that channel (public
+        # mode `/ccslack adduser`). Additive to the global ALLOWED_USERS list.
+        self.channel_grants: dict[str, set[str]] = {}
         self._schedule_save: Callable[[], None] = schedule_save
         self._has_window_state: Callable[[str], bool] = has_window_state
 
@@ -66,6 +69,7 @@ class ThreadRouter:
         self.window_display_names.clear()
         self._window_to_channel.clear()
         self.chat_threads.clear()
+        self.channel_grants.clear()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -110,6 +114,11 @@ class ThreadRouter:
                 for channel_id, ts_set in self.chat_threads.items()
                 if ts_set
             },
+            "channel_grants": {
+                channel_id: sorted(user_set)
+                for channel_id, user_set in self.channel_grants.items()
+                if user_set
+            },
         }
 
     def from_dict(self, data: dict[str, Any]) -> None:
@@ -141,6 +150,15 @@ class ThreadRouter:
             }
         else:
             self.chat_threads = {}
+        raw_grants = data.get("channel_grants", {})
+        if isinstance(raw_grants, dict):
+            self.channel_grants = {
+                str(channel_id): {str(uid) for uid in user_list}
+                for channel_id, user_list in raw_grants.items()
+                if isinstance(user_list, list) and user_list
+            }
+        else:
+            self.channel_grants = {}
         self._dedup_channel_bindings()
         self._rebuild_reverse_index()
 
@@ -250,6 +268,45 @@ class ThreadRouter:
         ``turn_threads.clear_channel``), NOT from a restore/resume rebind.
         """
         if self.chat_threads.pop(channel_id, None) is not None:
+            self._schedule_save()
+
+    # ------------------------------------------------------------------
+    # Per-channel user grants (public-mode `/ccslack adduser`)
+    # ------------------------------------------------------------------
+
+    def grant_user(self, channel_id: str, user_id: str) -> bool:
+        """Grant *user_id* access in *channel_id*. True if newly added."""
+        if not channel_id or not user_id:
+            return False
+        grants = self.channel_grants.setdefault(channel_id, set())
+        if user_id in grants:
+            return False
+        grants.add(user_id)
+        self._schedule_save()
+        return True
+
+    def revoke_user(self, channel_id: str, user_id: str) -> bool:
+        """Revoke *user_id*'s access in *channel_id*. True if it was present."""
+        grants = self.channel_grants.get(channel_id)
+        if not grants or user_id not in grants:
+            return False
+        grants.discard(user_id)
+        if not grants:
+            self.channel_grants.pop(channel_id, None)
+        self._schedule_save()
+        return True
+
+    def is_user_granted(self, channel_id: str, user_id: str) -> bool:
+        """True if *user_id* has an explicit grant in *channel_id*."""
+        return user_id in self.channel_grants.get(channel_id, set())
+
+    def list_grants(self, channel_id: str) -> list[str]:
+        """Sorted user_ids explicitly granted access in *channel_id*."""
+        return sorted(self.channel_grants.get(channel_id, set()))
+
+    def clear_channel_grants(self, channel_id: str) -> None:
+        """Forget a channel's grants — only on genuine teardown."""
+        if self.channel_grants.pop(channel_id, None) is not None:
             self._schedule_save()
 
     def get_channel_for_window(self, window_id: str) -> str | None:

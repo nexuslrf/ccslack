@@ -106,6 +106,7 @@ def prune_channel(channel_id: str, window_id: str | None = None) -> None:
     else:
         clear_channel(channel_id)
     thread_router.clear_chat_threads(channel_id)
+    thread_router.clear_channel_grants(channel_id)
     logger.info("Pruned gone channel %s (window %s) — binding removed", channel_id, wid)
 
 

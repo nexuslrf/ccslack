@@ -303,6 +303,29 @@ reach the agent as usual.
 - **Where**: a bound session channel.
 - **Auth**: channel membership.
 
+### `/ccslack here <dir> [provider]`
+
+Bind **the current channel** to a fresh tmux session — the bring-your-own-channel
+path for when the bot can't (or shouldn't) create the channel itself. You create
+the channel, add the ccslack bot, then run this inside it. Spawns the window,
+binds this channel, pins the status message, and posts a welcome. Refuses if the
+channel is already a session.
+
+- **Where**: a channel the bot is in, not already bound.
+- **Auth**: `ALLOWED_USERS` (binding a new session is a privileged action).
+
+### `/ccslack adduser @user …` · `removeuser @user …` · `users`
+
+Manage **who may drive this session** — relevant in [public mode](#public-office-mode),
+where channel membership alone isn't trusted. `adduser`/`removeuser` grant or
+revoke access **scoped to this channel only** (persisted, survives restart and
+restore); `users` lists current grants. `ALLOWED_USERS` always have access on top
+of any grants.
+
+- **Where**: a bound session channel.
+- **Auth**: `adduser`/`removeuser` require `ALLOWED_USERS`; `users` is readable by
+  anyone already authorized in the channel.
+
 ### `/ccslack kill [target | --all --confirm]`
 
 Tear down sessions.
@@ -450,6 +473,36 @@ invoke that form by hand.
 
 ---
 
+## Public (office) mode
+
+For workspaces that **forbid private channels** (so the `groups:write` family
+is unavailable), set `CCSLACK_PUBLIC_CHANNELS=true`. This flips two coupled
+behaviours:
+
+1. **Session channels are public** — created via `channels:manage` (or, if the
+   bot can't create them, by you, then bound with `/ccslack here`).
+2. **Channel membership is no longer trusted.** A public channel anyone can
+   join must not grant terminal access, so auth becomes **`ALLOWED_USERS` +
+   per-channel `/ccslack adduser` grants** for *all* in-channel actions
+   (messages → tmux, buttons, everything). The two are coupled on purpose:
+   public + member-trust would let any workspace member drive your terminal.
+
+Setup deltas vs the default manifest:
+- Scopes: `channels:manage`, `channels:history`, `channels:read` (in place of
+  the `groups:*` create/read/history).
+- Event subscription: `message.channels` instead of `message.groups`.
+- Any channel-management call the bot isn't allowed to make (create / invite /
+  topic / archive / rename) degrades to an **instruction message** instead of a
+  hard failure — e.g. create-denied points you at `/ccslack here`.
+
+> ⚠️ **Confidentiality:** in a public channel, the agent's terminal output,
+> `/ccslack send` uploads, and screenshots are visible to the **whole
+> workspace**. The `/send` secret/gitleaks filters still apply to *files*, but
+> can't stop the agent from echoing a secret into the transcript. Don't run
+> secret-bearing sessions this way.
+
+---
+
 ## Permission summary
 
 | Action | Permission |
@@ -459,9 +512,11 @@ invoke that form by hand.
 | Dashboard 🗑️ Kill button | `ALLOWED_USERS` |
 | `/ccslack kill --all`, kill by `<#channel>` / `C…` / `@N` | `ALLOWED_USERS` |
 | `/ccslack kill` (from session channel) | Channel membership |
-| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `yolo`, `chat` | Channel membership |
+| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `yolo`, `chat`, `users` | Channel membership* |
+| `/ccslack here` (bind current channel) | `ALLOWED_USERS` |
+| `/ccslack adduser`, `removeuser` | `ALLOWED_USERS` |
 | `/ccslack send` outside the cwd | `ALLOWED_USERS` (on top of channel membership) |
-| Inbound message → tmux | Channel membership (chat-thread replies are never forwarded) |
+| Inbound message → tmux | Channel membership* (chat-thread replies are never forwarded) |
 | Status-message buttons (Screenshot, Toolbar, File, Archive) | Channel membership |
 | File-browser + table-render buttons | Channel membership |
 | Live picker buttons | Channel membership |
@@ -469,6 +524,11 @@ invoke that form by hand.
 | Toolbar key buttons | Channel membership |
 | `@ccslack` mention | `ALLOWED_USERS` (in meta) OR channel membership (in session channel) |
 
+\* **In [public mode](#public-office-mode)** (`CCSLACK_PUBLIC_CHANNELS=true`),
+"channel membership" no longer grants access — those rows require `ALLOWED_USERS`
+or an explicit `/ccslack adduser` grant for that channel instead.
+
 The principle: meta channel + cross-cutting actions ("create a session",
 "kill someone else's", "kill everything") require the global allow-list;
-in-channel actions defer to who Slack let into the channel.
+in-channel actions defer to who Slack let into the channel (private mode) or to
+explicit grants (public mode).

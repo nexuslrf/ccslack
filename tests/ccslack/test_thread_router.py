@@ -90,6 +90,39 @@ def test_reset_clears_chat_threads(router: ThreadRouter) -> None:
     assert router.is_chat_thread("C1", "100.1") is False
 
 
+def test_channel_grants_add_revoke_query(router: ThreadRouter) -> None:
+    assert router.grant_user("C1", "U1") is True
+    assert router.grant_user("C1", "U1") is False  # idempotent
+    assert router.is_user_granted("C1", "U1") is True
+    assert router.is_user_granted("C1", "U2") is False
+    assert router.list_grants("C1") == ["U1"]
+    assert router.revoke_user("C1", "U1") is True
+    assert router.revoke_user("C1", "U1") is False
+    assert router.is_user_granted("C1", "U1") is False
+
+
+def test_channel_grants_persist_roundtrip(router: ThreadRouter) -> None:
+    router.grant_user("C1", "U1")
+    router.grant_user("C1", "U2")
+    data = router.to_dict()
+
+    other = ThreadRouter(schedule_save=lambda: None, has_window_state=lambda _w: False)
+    other.from_dict(data)
+    assert other.list_grants("C1") == ["U1", "U2"]
+
+
+def test_channel_grants_survive_rebind_cleared_on_teardown(router: ThreadRouter) -> None:
+    router.bind_channel("C1", "@1")
+    router.grant_user("C1", "U1")
+    # Rebind (restore) keeps grants.
+    router.unbind_channel("C1")
+    router.bind_channel("C1", "@2")
+    assert router.is_user_granted("C1", "U1") is True
+    # Teardown forgets them.
+    router.clear_channel_grants("C1")
+    assert router.is_user_granted("C1", "U1") is False
+
+
 def test_rebind_evicts_old_binding(router: ThreadRouter) -> None:
     router.bind_channel("C111", "@0")
     router.bind_channel("C222", "@0")

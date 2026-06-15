@@ -243,6 +243,17 @@ class Config:
             "CCSLACK_JOIN_OFFER", "true"
         ).lower() in ("1", "true", "yes")
 
+        # Public-channel ("office") mode. When true, ccslack creates PUBLIC
+        # session channels AND stops trusting channel membership for auth — a
+        # public channel anyone can join must not implicitly grant terminal
+        # access. The two are coupled on purpose: public + member-trust would
+        # let any workspace member drive the agent. Default false keeps the
+        # original private-channel behaviour. Auth in this mode = ALLOWED_USERS
+        # plus per-channel grants (`/ccslack adduser`).
+        self.public_channels: bool = os.getenv(
+            "CCSLACK_PUBLIC_CHANNELS", "false"
+        ).lower() in ("1", "true", "yes")
+
         # Group an agent turn's tool_use / tool_result / thinking under one
         # threaded parent message in the main channel, so long tool chains
         # don't flood the channel. Plain answers + interactive prompts stay in

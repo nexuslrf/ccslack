@@ -28,6 +28,7 @@ override env vars where applicable.
 | `CCSLACK_CHANNEL_PREFIX` | `ccslack` | Prefix for auto-created channel names: `<prefix>-<cwd-slug>`. Sanitized to Slack-legal characters. Set to empty to use just the cwd slug (e.g. `vrender` instead of `ccslack-vrender`). |
 | `CCSLACK_TABLE_RENDER` | `true` | When an agent answer contains a markdown table, post a button offering to render it as an image (Slack renders markdown tables poorly). The raw text is always posted; set `false` to suppress the button. |
 | `CCSLACK_JOIN_OFFER` | `true` | After `/ccslack new` creates a session, post a notice in the meta channel with a **Join** button so the other `ALLOWED_USERS` can opt into the new private channel. Set `false` to skip it. |
+| `CCSLACK_PUBLIC_CHANNELS` | `false` | **Office mode.** Create **public** session channels and stop trusting channel membership for auth — instead require `ALLOWED_USERS` + per-channel `/ccslack adduser` grants. For workspaces that forbid private channels (`groups:write`). Needs `channels:manage`/`channels:history`/`channels:read` + the `message.channels` event. ⚠️ Agent output, `/send` files, and screenshots become visible to the whole workspace. See [commands](commands.md#public-office-mode). |
 
 ### Storage + tmux
 

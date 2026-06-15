@@ -88,6 +88,13 @@ everything at once.
 - `app_mention`
 - `message.groups` (so the bot can see messages in private session channels)
 
+> **Office / public-channel mode** (`CCSLACK_PUBLIC_CHANNELS=true`, for
+> workspaces that forbid private channels): swap the `groups:*` scopes for
+> `channels:manage` + `channels:history` + `channels:read`, and subscribe to
+> `message.channels` instead of `message.groups`. Auth then requires
+> `ALLOWED_USERS` + `/ccslack adduser` grants, and agent output is visible to
+> the whole workspace. See [commands → Public (office) mode](commands.md#public-office-mode).
+
 ### 3d. Slash command
 
 **Features → Slash Commands → Create New Command**:

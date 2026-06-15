@@ -44,6 +44,25 @@ logger = structlog.get_logger()
 _SUPPORTED_PROVIDERS = ("claude", "codex", "gemini", "pi", "shell")
 _CHANNEL_NAME_SAFE = re.compile(r"[^a-z0-9-]+")
 
+# Slack user references in slash-command text: ``<@U123|name>`` / ``<@U123>``
+# (when "escape users" is on) or a bare ``U…`` / ``W…`` id.
+_USER_MENTION_RE = re.compile(r"^<@([UW][A-Z0-9]+)(?:\|[^>]*)?>$")
+_BARE_USER_RE = re.compile(r"^[UW][A-Z0-9]{6,}$")
+
+
+def _parse_user_ids(args: list[str]) -> list[str]:
+    """Extract Slack user ids from slash-command args (mentions or bare ids)."""
+    ids: list[str] = []
+    for token in args:
+        match = _USER_MENTION_RE.match(token)
+        if match:
+            ids.append(match.group(1))
+        elif _BARE_USER_RE.match(token):
+            ids.append(token)
+    # De-dup, preserve order.
+    seen: set[str] = set()
+    return [uid for uid in ids if not (uid in seen or seen.add(uid))]
+
 
 def _sanitize_channel_name(raw: str) -> str:
     """Turn a string into a Slack-legal private channel slug.
@@ -73,6 +92,21 @@ def _channel_name_for(cwd: Path) -> str:
 # the name, so a same-cwd session needs to walk past prior channels).
 _CHANNEL_NAME_MAX_LEN = 80
 _CHANNEL_NAME_MAX_TRIES = 30
+
+# Slack errors that mean "the bot isn't permitted to do this channel op" — used
+# to fall back to manual instructions rather than a bare error (office mode,
+# where channel-management scopes may be withheld).
+_CHANNEL_DENIED_ERRORS: frozenset[str] = frozenset(
+    {
+        "missing_scope",
+        "not_allowed_token_type",
+        "restricted_action",
+        "permission_denied",
+        "team_access_not_granted",
+        "method_not_supported_for_channel_type",
+        "user_is_restricted",
+    }
+)
 
 
 def _suffixed_channel_name(base: str, suffix: str | int) -> str:
@@ -111,15 +145,19 @@ async def _create_unique_channel(
     base: str,
     window_id: str,
 ) -> tuple[str | None, str]:
-    """Create a private channel, walking past ``name_taken`` collisions.
+    """Create a session channel, walking past ``name_taken`` collisions.
 
-    Returns ``(channel_id, "")`` on success or ``(None, error)`` when every
-    candidate is taken or Slack returns a non-``name_taken`` error.
+    Private by default; public when ``CCSLACK_PUBLIC_CHANNELS`` is set (office
+    mode). Returns ``(channel_id, "")`` on success or ``(None, error)`` when
+    every candidate is taken or Slack returns a non-``name_taken`` error.
     """
+    is_private = not config.public_channels
     last_error = "name_taken"
     for name in _channel_name_candidates(base, window_id):
         try:
-            result = await bolt_client.conversations_create(name=name, is_private=True)
+            result = await bolt_client.conversations_create(
+                name=name, is_private=is_private
+            )
             return result["channel"]["id"], ""
         except SlackApiError as exc:
             last_error = (exc.response.get("error") if exc.response else "") or str(exc)
@@ -188,6 +226,10 @@ def register(app: AsyncApp) -> None:
             "thread",
             "yolo",
             "chat",
+            "here",
+            "adduser",
+            "removeuser",
+            "users",
             "help",
             "?",
             "-h",
@@ -245,6 +287,18 @@ def register(app: AsyncApp) -> None:
 
         if sub == "chat":
             await _handle_chat(client, channel_id, user_id, args)
+            return
+
+        if sub == "here":
+            await _handle_here(client, channel_id, user_id, args)
+            return
+
+        if sub in ("adduser", "removeuser"):
+            await _handle_grant(client, channel_id, user_id, args, grant=sub == "adduser")
+            return
+
+        if sub == "users":
+            await _handle_users(client, channel_id, user_id)
             return
 
         if sub == "mute":
@@ -350,6 +404,10 @@ def _help_text() -> str:
         "the current channel.\n"
         f"• `{slash} chat [topic]` — start a human-only thread; replies in it "
         "are not sent to the agent.\n"
+        f"• `{slash} here <dir> [provider]` — bind THIS channel to a fresh "
+        "session (for channels you created + invited the bot to).\n"
+        f"• `{slash} adduser @user` / `removeuser @user` / `users` — manage "
+        "who may drive this session (public mode; `ALLOWED_USERS` only).\n"
         f"• `{slash} help` — this message."
     )
 
@@ -538,13 +596,23 @@ async def _handle_new(
     )
     if new_channel is None:
         await tmux_manager.kill_window(window_id)
-        hint = (
-            " (all candidate names are taken — archive an old "
-            f"`{channel_slug}*` channel or set a different "
-            "`CCSLACK_CHANNEL_PREFIX`)"
-            if create_error == "name_taken"
-            else ""
-        )
+        if create_error == "name_taken":
+            hint = (
+                " (all candidate names are taken — archive an old "
+                f"`{channel_slug}*` channel or set a different "
+                "`CCSLACK_CHANNEL_PREFIX`)"
+            )
+        elif create_error in _CHANNEL_DENIED_ERRORS:
+            # The bot lacks channel-create rights here — hand off to the manual
+            # bring-your-own-channel path instead of just erroring.
+            kind = "public" if config.public_channels else "private"
+            hint = (
+                f". I'm not allowed to create the channel. Create a {kind} "
+                f"channel yourself, add me to it, then run "
+                f"`{config.slash_command} here {raw_dir} {provider}` there."
+            )
+        else:
+            hint = ""
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
@@ -1028,6 +1096,201 @@ async def _handle_chat(
         thread_router.mark_chat_thread(channel_id, ts)
 
 
+async def _handle_here(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    args: list[str],
+) -> None:
+    """``/ccslack here <dir> [provider]`` — bind THIS channel to a fresh session.
+
+    The bring-your-own-channel path: a human creates the channel (public, in
+    office mode), adds the bot, and runs this to attach a tmux session — used
+    when the bot isn't allowed to create channels itself.
+    """
+    if thread_router.get_window_for_channel(channel_id) is not None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                "ccslack: this channel is already a session. Use "
+                f"`{config.slash_command} kill` to end it, or "
+                f"`{config.slash_command} restore` if its window died."
+            ),
+        )
+        return
+    if not args:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack: usage `{config.slash_command} here <directory> [provider]`",
+        )
+        return
+
+    raw_dir = args[0]
+    provider = (args[1] if len(args) > 1 else config.provider_name).lower()
+    if provider not in _SUPPORTED_PROVIDERS:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: unknown provider `{provider}`. "
+                f"Pick one of: {', '.join(_SUPPORTED_PROVIDERS)}."
+            ),
+        )
+        return
+
+    work_dir = Path(raw_dir).expanduser()
+    try:
+        work_dir = work_dir.resolve()
+    except OSError as exc:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack: bad path `{raw_dir}`: {exc}",
+        )
+        return
+    if not work_dir.is_dir():
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack: not a directory: `{work_dir}`",
+        )
+        return
+
+    # Reuse the restore core: it spawns the window, binds THIS channel, sets
+    # provider/origin, and posts the pinned status message.
+    from .recovery import restore_in_channel
+
+    new_window_id = await restore_in_channel(
+        client,
+        channel_id,
+        provider=provider,
+        cwd=str(work_dir),
+        session_id="",
+        mode="fresh",
+        old_window_id=None,
+        window_name=_sanitize_channel_name(work_dir.name),
+        announce=False,
+    )
+    if new_window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: couldn't start the session (check logs).",
+        )
+        return
+
+    # Best-effort topic so topic-based restore works later (no-op if denied).
+    bolt_client = BoltSlackClient(client)
+    with contextlib.suppress(SlackApiError):
+        await bolt_client.conversations_setTopic(
+            channel=channel_id, topic=f"{provider} · {work_dir}"
+        )
+    with contextlib.suppress(SlackApiError):
+        await bolt_client.chat_postMessage(
+            channel=channel_id,
+            text=(
+                f":sparkles: Session ready — `{provider}` in `{work_dir}` "
+                f"(tmux `{new_window_id}`). Type a message to send it to the agent."
+            ),
+        )
+
+
+async def _handle_grant(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    args: list[str],
+    *,
+    grant: bool,
+) -> None:
+    """``/ccslack adduser|removeuser @user …`` — per-channel access (ALLOWED_USERS only)."""
+    verb = "adduser" if grant else "removeuser"
+    if thread_router.get_window_for_channel(channel_id) is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack: `{verb}` only works inside a bound session channel.",
+        )
+        return
+
+    from .auth import is_meta_authorized
+
+    if not is_meta_authorized(user_id):
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: only `ALLOWED_USERS` can change channel access.",
+        )
+        return
+
+    targets = _parse_user_ids(args)
+    if not targets:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack: usage `{config.slash_command} {verb} @user [@user …]`.",
+        )
+        return
+
+    if grant:
+        changed = [u for u in targets if thread_router.grant_user(channel_id, u)]
+        unchanged = [u for u in targets if u not in changed]
+        done_word, skip_word = "granted access to", "already had access:"
+    else:
+        changed = [u for u in targets if thread_router.revoke_user(channel_id, u)]
+        unchanged = [u for u in targets if u not in changed]
+        done_word, skip_word = "revoked access from", "wasn't granted:"
+
+    parts: list[str] = []
+    if changed:
+        parts.append(f"{done_word} " + ", ".join(f"<@{u}>" for u in changed))
+    if unchanged:
+        parts.append(f"{skip_word} " + ", ".join(f"<@{u}>" for u in unchanged))
+    with contextlib.suppress(SlackApiError):
+        await client.chat_postMessage(
+            channel=channel_id,
+            text=":white_check_mark: " + "; ".join(parts) + " for this session.",
+        )
+
+
+async def _handle_users(client, channel_id: str, user_id: str) -> None:  # noqa: ANN001
+    """``/ccslack users`` — list per-channel grants for this session."""
+    if thread_router.get_window_for_channel(channel_id) is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `users` only works inside a bound session channel.",
+        )
+        return
+    grants = thread_router.list_grants(channel_id)
+    if grants:
+        listing = ", ".join(f"<@{u}>" for u in grants)
+        text = (
+            f"Granted in this session: {listing}\n"
+            "(plus everyone in `ALLOWED_USERS`)."
+        )
+    else:
+        text = (
+            "No per-channel grants yet. Only `ALLOWED_USERS` can drive this "
+            f"session — add others with `{config.slash_command} adduser @user`."
+        )
+    await _post_ephemeral(
+        client.chat_postEphemeral, channel=channel_id, user=user_id, text=text
+    )
+
+
 async def _handle_mute(
     client,  # noqa: ANN001
     channel_id: str,
@@ -1137,6 +1400,7 @@ async def _kill_one(client, channel_id: str, window_id: str) -> str:  # noqa: AN
 
     clear_channel(channel_id)
     thread_router.clear_chat_threads(channel_id)
+    thread_router.clear_channel_grants(channel_id)
 
     try:
         await bolt_client.conversations_archive(channel=channel_id)

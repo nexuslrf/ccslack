@@ -548,6 +548,7 @@ async def _archive(
     forget_window(window_id)
     clear_channel(channel_id)
     thread_router.clear_chat_threads(channel_id)
+    thread_router.clear_channel_grants(channel_id)
     message_ts = (body.get("message") or {}).get("ts")
     if message_ts:
         with contextlib.suppress(SlackApiError):
