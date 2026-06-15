@@ -88,12 +88,10 @@ everything at once.
 - `app_mention`
 - `message.groups` (so the bot can see messages in private session channels)
 
-> **Office / public-channel mode** (`CCSLACK_PUBLIC_CHANNELS=true`, for
-> workspaces that forbid private channels): swap the `groups:*` scopes for
-> `channels:manage` + `channels:history` + `channels:read`, and subscribe to
-> `message.channels` instead of `message.groups`. Auth then requires
-> `ALLOWED_USERS` + `/ccslack adduser` grants, and agent output is visible to
-> the whole workspace. See [commands → Public (office) mode](commands.md#public-office-mode).
+> **Workspace forbids private channels?** Use the office / public-channel
+> setup in [§3g](#3g-office--public-channel-mode-alternative) instead — it
+> swaps the `groups:*` scopes for `channels:*` and the event to
+> `message.channels`.
 
 ### 3d. Slash command
 
@@ -143,11 +141,69 @@ Either way, the manifest sets:
 
 Skip ahead to [§4](#4-create-the-meta-channel).
 
+### 3g. Office / public-channel mode (alternative)
+
+Use this **instead of** the private-channel setup above if your workspace
+**forbids private channels** (i.e. you can't be granted the `groups:write`
+family). In this mode ccslack uses **public** channels and — critically —
+**stops trusting channel membership**, because anyone can join a public channel
+and you don't want them driving your terminal.
+
+> ⚠️ **Confidentiality:** in public channels the agent's terminal output,
+> `/ccslack send` uploads, and screenshots are visible to the **whole
+> workspace**. Don't run secret-bearing sessions this way. The `/send`
+> secret/gitleaks filters still apply to *files* but can't stop the agent from
+> echoing a secret into the transcript.
+
+Configure four things differently:
+
+1. **Bot scopes** — drop `groups:read` / `groups:history` / `groups:write` /
+   `groups:write.invites`; keep / add:
+
+   | Scope | Why |
+   |---|---|
+   | `channels:manage` | Create + archive **public** session channels |
+   | `channels:read` | Look up public channels |
+   | `channels:history` | **Required** for `message.channels` events to deliver bodies |
+
+   Keep everything else (`chat:write`, `commands`, `app_mentions:read`,
+   `pins:*`, `files:*`, `reactions:write`). Reinstall the app after changing
+   scopes.
+
+2. **Event subscription** — subscribe to **`message.channels`** instead of
+   `message.groups` (keep `app_mention`).
+
+3. **Meta channel** — make it a **public** channel (§4), and add the bot with
+   `/invite @ccslack`.
+
+4. **Env** — set the mode flag in `~/.ccslack/.env`:
+
+   ```ini
+   CCSLACK_PUBLIC_CHANNELS=true
+   ```
+
+   This single flag makes `/ccslack new` create public channels **and** switches
+   auth to `ALLOWED_USERS` + per-channel grants (the two are coupled on purpose).
+
+**Using sessions in this mode:**
+- `/ccslack new <dir>` still works if the bot has `channels:manage` — it just
+  creates a *public* channel.
+- If channel creation is denied, ccslack tells you to create the channel
+  yourself, `/invite @ccslack`, then run **`/ccslack here <dir> [provider]`** in
+  it to bind a fresh session.
+- Only `ALLOWED_USERS` can drive a session by default. Grant others
+  per-channel with **`/ccslack adduser @teammate`** (`removeuser` / `users` to
+  manage), run by an `ALLOWED_USERS` member inside that channel.
+
+Full reference: [commands → Public (office) mode](commands.md#public-office-mode).
+
 ---
 
 ## 4. Create the meta channel
 
-In Slack, create a **private channel** (e.g. `#ccslack`). Invite the bot:
+In Slack, create a channel (e.g. `#ccslack`) — **private** for the default
+setup, or **public** for [office mode](#3g-office--public-channel-mode-alternative).
+Invite the bot:
 
 ```
 /invite @ccslack
@@ -187,7 +243,8 @@ ALLOWED_USERS=U0123ABC456,U0987XYZ
 ```
 
 Optional — see [`docs/configuration.md`](configuration.md) for the
-complete env reference.
+complete env reference. For a workspace that forbids private channels, add
+`CCSLACK_PUBLIC_CHANNELS=true` (see [§3g](#3g-office--public-channel-mode-alternative)).
 
 ---
 
@@ -277,6 +334,11 @@ They **cannot** spawn new sessions or kill other people's sessions
 unless you add their user ID to `ALLOWED_USERS` (then they can drive
 the meta channel too).
 
+> **In [office / public mode](#3g-office--public-channel-mode-alternative)**,
+> membership is *not* enough — a `/invite` lets someone *see* the channel but
+> not drive it. An `ALLOWED_USERS` member must run `/ccslack adduser @teammate`
+> in the channel to grant access (`/ccslack users` lists current grants).
+
 ---
 
 ## Troubleshooting
@@ -284,7 +346,8 @@ the meta channel too).
 | Symptom | Fix |
 |---|---|
 | `@ccslack` doesn't reply at all | Bolt isn't connected. Check `xapp-` token, Socket Mode enabled, bot installed |
-| `/ccslack new` silently fails | Missing `channels:manage` or `groups:write` scope — reinstall the app |
+| `/ccslack new` silently fails | Missing `groups:write` (private) / `channels:manage` (public) scope — reinstall the app. In office mode, create the channel yourself + `/ccslack here <dir>` |
+| In a public channel, allowed actions are refused | Office mode doesn't trust membership — an `ALLOWED_USERS` member must `/ccslack adduser @you` in that channel |
 | 🚫 reaction on every message | Your user ID isn't in `ALLOWED_USERS` (or you're not a member of a bound channel) |
 | No transcript ever streams back | Claude hook not installed — `uv run ccslack hook --install` |
 | Codex Stop hook shows "invalid stop hook JSON output" | You're on an old ccslack; this was fixed by emitting `{}` on stdout. Pull latest. |
