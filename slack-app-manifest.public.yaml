@@ -1,0 +1,92 @@
+# ccslack — Slack app manifest (PUBLIC / "office" mode)
+#
+# Use this variant instead of slack-app-manifest.yaml when your workspace
+# FORBIDS private channels (so the groups:write family can't be granted).
+# It uses PUBLIC session channels and the public read scope/event.
+#
+# Pair it with `CCSLACK_PUBLIC_CHANNELS=true` in your .env. In this mode the
+# bot stops trusting channel membership: only ALLOWED_USERS (plus per-channel
+# `/ccslack adduser` grants) can drive a session. See docs/commands.md
+# "Public (office) mode" and docs/setup.md §3g.
+#
+# ⚠️ Output is visible to the whole workspace in public channels — don't run
+#    secret-bearing sessions this way.
+#
+# How to apply: same steps as the default manifest (create app from manifest,
+# generate the xapp- app-level token with connections:write, install, set the
+# meta channel + ALLOWED_USERS). The meta channel here is a PUBLIC channel the
+# bot is invited to.
+
+display_information:
+  name: ccslack
+  description: Drive AI coding agents (Claude Code, Codex, Gemini, Pi, shell) from Slack via tmux.
+  background_color: "#1f2937"
+
+features:
+  bot_user:
+    display_name: ccslack
+    always_online: true
+  slash_commands:
+    - command: /ccslack
+      description: Manage ccslack sessions
+      usage_hint: "new <dir> [provider] | here <dir> | adduser @u | purge | kill | help"
+      should_escape: false
+
+oauth_config:
+  scopes:
+    bot:
+      # Listen for @ccslack in any channel the bot is in.
+      - app_mentions:read
+
+      # Post messages, edit messages, send ephemerals.
+      - chat:write
+
+      # Receive the `/ccslack` slash command.
+      - commands
+
+      # Create + archive PUBLIC session channels.
+      - channels:manage
+
+      # Look up public channels.
+      - channels:read
+
+      # Read message history in public session channels — REQUIRED for the
+      # ``message.channels`` event to actually deliver message bodies to the
+      # bot (channels:read alone won't unlock it).
+      - channels:history
+
+      # NOTE: no groups:* (private-channel) scopes — those are what your
+      # workspace withholds. If the bot can't create channels at all, a human
+      # creates the public channel + invites the bot, then `/ccslack here`.
+
+      # Pin the per-channel status message (chat.update target).
+      - pins:write
+      - pins:read
+
+      # Upload screenshots (PNGs) + /ccslack send files.
+      - files:write
+      - files:read
+
+      # ✓ / 🚫 / ⚠️ reactions on inbound prompts. Required for the visual
+      # ack pattern the text handler uses.
+      - reactions:write
+
+settings:
+  event_subscriptions:
+    bot_events:
+      # @ccslack health-check ping.
+      - app_mention
+
+      # All inbound text in PUBLIC session channels routes through here.
+      # (This is the line most commonly missed when switching to public mode.)
+      - message.channels
+
+  interactivity:
+    # Required for Block Kit buttons (status bar, toolbar, picker,
+    # recovery banner, dashboard). No `request_url` because we use Socket Mode.
+    is_enabled: true
+
+  # ccslack uses Socket Mode so no public HTTPS endpoint is needed.
+  socket_mode_enabled: true
+
+  token_rotation_enabled: false

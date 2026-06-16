@@ -113,7 +113,10 @@ it as `SLACK_BOT_TOKEN`.
 ### 3f. App Manifest (one-shot, recommended)
 
 There's a ready-to-paste manifest at the repo root:
-[`slack-app-manifest.yaml`](../slack-app-manifest.yaml).
+[`slack-app-manifest.yaml`](../slack-app-manifest.yaml) (private channels —
+the default). For a workspace that forbids private channels, use
+[`slack-app-manifest.public.yaml`](../slack-app-manifest.public.yaml) and see
+[§3g](#3g-office--public-channel-mode-alternative).
 
 Two ways to use it:
 
@@ -155,7 +158,11 @@ and you don't want them driving your terminal.
 > secret/gitleaks filters still apply to *files* but can't stop the agent from
 > echoing a secret into the transcript.
 
-Configure four things differently:
+> **Shortcut:** paste [`slack-app-manifest.public.yaml`](../slack-app-manifest.public.yaml)
+> instead of the default manifest — it already has the right public scopes and
+> the `message.channels` event. Then just set `CCSLACK_PUBLIC_CHANNELS=true`.
+
+Or change four things by hand:
 
 1. **Bot scopes** — drop `groups:read` / `groups:history` / `groups:write` /
    `groups:write.invites`; keep / add:
@@ -171,7 +178,9 @@ Configure four things differently:
    scopes.
 
 2. **Event subscription** — subscribe to **`message.channels`** instead of
-   `message.groups` (keep `app_mention`).
+   `message.groups` (keep `app_mention`). **This is the step most people
+   miss** — without it the bot receives no messages in public channels (no
+   reaction, nothing reaches tmux), even though it can still post.
 
 3. **Meta channel** — make it a **public** channel (§4), and add the bot with
    `/invite @ccslack`.
@@ -348,6 +357,7 @@ the meta channel too).
 | `@ccslack` doesn't reply at all | Bolt isn't connected. Check `xapp-` token, Socket Mode enabled, bot installed |
 | `/ccslack new` silently fails | Missing `groups:write` (private) / `channels:manage` (public) scope — reinstall the app. In office mode, create the channel yourself + `/ccslack here <dir>` |
 | In a public channel, allowed actions are refused | Office mode doesn't trust membership — an `ALLOWED_USERS` member must `/ccslack adduser @you` in that channel |
+| Public mode: bot posts but **never reacts** / nothing reaches tmux | The app isn't receiving message events. Subscribe to the **`message.channels`** event and add the **`channels:history`** scope, then reinstall. (No 🚫 reaction = the message handler isn't firing at all — a delivery/subscription problem, not auth.) |
 | 🚫 reaction on every message | Your user ID isn't in `ALLOWED_USERS` (or you're not a member of a bound channel) |
 | No transcript ever streams back | Claude hook not installed — `uv run ccslack hook --install` |
 | Codex Stop hook shows "invalid stop hook JSON output" | You're on an old ccslack; this was fixed by emitting `{}` on stdout. Pull latest. |
