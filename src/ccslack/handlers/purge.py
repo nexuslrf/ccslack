@@ -67,9 +67,16 @@ def _ensure_loaded() -> None:
         return
     led = raw.get("ledger", {})
     if isinstance(led, dict):
-        _ledger.update(
-            {str(ch): list(entries) for ch, entries in led.items() if entries}
-        )
+        for ch, entries in led.items():
+            if not entries:
+                continue
+            _ledger[str(ch)] = list(entries)
+            # Seed the round counter past the highest persisted round so that
+            # after a restart a new round can't reuse an old round's number and
+            # have the per-response button delete stale messages.
+            with contextlib.suppress(ValueError, TypeError):
+                highest = max(int(e.get("round", 0)) for e in entries)
+                _round[str(ch)] = max(_round.get(str(ch), 0), highest)
     auto = raw.get("autopurge", {})
     if isinstance(auto, dict):
         for ch, hours in auto.items():

@@ -105,6 +105,28 @@ def test_autopurge_get_set_off():
 
 
 @pytest.mark.asyncio
+async def test_ledger_and_autopurge_survive_reload():
+    # Simulate a bot restart: record, persist, drop in-memory state, reload.
+    purge.bump_round("C1")
+    purge.bump_round("C1")  # round 2
+    purge.record("C1", "1.1", kind="answer")
+    purge.set_autopurge("C1", 2.0)
+    # Drop in-memory state but keep the file, then force a fresh load.
+    purge._ledger.clear()
+    purge._autopurge.clear()
+    purge._round.clear()
+    purge._loaded = False
+    purge._ensure_loaded()
+
+    assert purge.get_autopurge("C1") == 2.0
+    # Round counter is seeded past the persisted max so new rounds don't collide.
+    purge.bump_round("C1")
+    assert purge.current_round("C1") > 2
+    client = FakeSlackClient()
+    assert await purge.purge(client, "C1") == 1  # the reloaded entry
+
+
+@pytest.mark.asyncio
 async def test_forget_channel_clears_state():
     purge.record("C1", "1.1")
     purge.set_autopurge("C1", 1.0)
