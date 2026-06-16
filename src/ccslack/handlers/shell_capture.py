@@ -170,7 +170,11 @@ async def _capture_and_post(
     # bootstrap import path.
     from ..slack_sender import safe_post
 
-    await safe_post(client, channel=channel_id, text=body)
+    ts = await safe_post(client, channel=channel_id, text=body)
+    # Record so /ccslack purge + autopurge cover shell output too.
+    from . import purge
+
+    purge.record(channel_id, ts, kind="answer")
 
 
 def _prompt_returned(before: str, after: str) -> bool:

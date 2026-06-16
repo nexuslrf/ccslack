@@ -338,10 +338,10 @@ lingering exposure in a public channel.
 | `/ccslack purge since 30m` | Delete output posted in the last `30m` / `2h` / `1d`. |
 
 Only messages **ccslack posted** (agent answers, tool chains, thinking, prompt
-echoes) are deleted — never your typed prompts (Slack only lets a bot delete
-its own messages), the pinned **status message**, or **`/ccslack chat`**
-threads. File uploads' messages are removed but the underlying file object may
-linger.
+echoes, and **shell command output**) are deleted — never your typed prompts
+(Slack only lets a bot delete its own messages), the pinned **status message**,
+or **`/ccslack chat`** threads. File uploads' messages are removed but the
+underlying file object may linger.
 
 - **Where**: a bound session channel.
 - **Auth**: channel membership.

@@ -333,6 +333,10 @@ async def _relay_passive_output(
             new_ts = await safe_post(client, channel=channel_id, text=body)
             if new_ts:
                 state.msg_ts = new_ts
+                # Record so /ccslack purge + autopurge cover shell output too.
+                from . import purge
+
+                purge.record(channel_id, new_ts, kind="answer")
 
     # One-shot reaction on the user's source Slack message when exit code lands.
     if (
