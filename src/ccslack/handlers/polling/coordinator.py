@@ -107,7 +107,14 @@ def prune_channel(channel_id: str, window_id: str | None = None) -> None:
         clear_channel(channel_id)
     thread_router.clear_chat_threads(channel_id)
     thread_router.clear_channel_grants(channel_id)
+    from ..purge import forget_channel as _purge_forget
+    _purge_forget(channel_id)
     logger.info("Pruned gone channel %s (window %s) — binding removed", channel_id, wid)
+
+
+# How often the poll loop runs the autopurge sweep (delete output past each
+# channel's window). Coarse — autopurge granularity is hours, not seconds.
+_AUTOPURGE_SWEEP_INTERVAL = 300.0
 
 
 def start_status_polling(client: SlackClient) -> asyncio.Task[None]:
@@ -140,9 +147,16 @@ async def _poll_loop(client: SlackClient) -> None:
     from ..status import update_status
 
     interval = max(0.5, config.status_poll_interval)
+    last_sweep = 0.0
     while True:
         try:
             await _tick(client, update_status)
+            now = time.monotonic()
+            if now - last_sweep >= _AUTOPURGE_SWEEP_INTERVAL:
+                last_sweep = now
+                from ..purge import sweep
+
+                await sweep(client)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — never let one bad tick kill the loop

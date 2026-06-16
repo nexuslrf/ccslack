@@ -33,6 +33,30 @@ logger = structlog.get_logger()
 _RUNNING_TEXT = ":hammer_and_wrench: *Tool activity* — running… _(expand thread)_"
 
 
+def _parent_blocks(text: str) -> list[dict]:
+    """Parent-message blocks with a Close button that deletes the whole thread.
+
+    The button carries no id — the action handler uses the parent message's own
+    ts (which *is* the thread's parent ts) to purge the thread.
+    """
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+        {
+            "type": "actions",
+            "block_id": "ccslack_thread_actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": "ccslack_purge_thread",
+                    "style": "danger",
+                    "text": {"type": "plain_text", "text": ":wastebasket: Close thread"},
+                    "value": "thread",
+                }
+            ],
+        },
+    ]
+
+
 @dataclass
 class _Turn:
     """In-memory state for one agent turn in one channel."""
@@ -81,11 +105,21 @@ async def thread_parent_for(
         # Lazy: slack_sender pulls config; import at call site.
         from ...slack_sender import safe_post
 
-        ts = await safe_post(client, channel=channel_id, text=_RUNNING_TEXT)
+        ts = await safe_post(
+            client,
+            channel=channel_id,
+            text=_RUNNING_TEXT,
+            blocks=_parent_blocks(_RUNNING_TEXT),
+        )
         if not ts:
             return None
         turn = _Turn(parent_ts=ts)
         _turns[channel_id] = turn
+        # Record the parent so /ccslack purge + the thread Close button can
+        # delete the whole thread (its tool replies carry thread_ts=parent).
+        from .. import purge
+
+        purge.record(channel_id, ts, thread_ts=ts, kind="thread_parent")
     if is_tool:
         turn.tool_count += 1
     return turn.parent_ts
@@ -108,7 +142,14 @@ async def end_turn(client: SlackClient, channel_id: str) -> None:
         summary = f":hammer_and_wrench: *{turn.tool_count} tool call{plural}* · done"
     else:
         summary = ":speech_balloon: *Agent activity* · done"
-    await safe_update(client, channel=channel_id, ts=turn.parent_ts, text=summary)
+    # Keep the Close button on the finished thread.
+    await safe_update(
+        client,
+        channel=channel_id,
+        ts=turn.parent_ts,
+        text=summary,
+        blocks=_parent_blocks(summary),
+    )
 
 
 async def note_user_message(client: SlackClient, channel_id: str) -> None:

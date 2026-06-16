@@ -40,6 +40,7 @@ def register_all(app: AsyncApp) -> None:
         "send",
         "recovery",
         "table_render",
+        "purge",
     ):
         try:
             module = __import__(f"ccslack.handlers.{name}", fromlist=["register"])

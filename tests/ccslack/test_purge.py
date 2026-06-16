@@ -1,0 +1,201 @@
+import time
+
+import pytest
+
+from ccslack.config import config
+from ccslack.handlers import purge
+from ccslack.handlers.meta import _handle_autopurge, _handle_purge, _parse_duration
+from ccslack.slack_client import FakeSlackClient
+from ccslack.thread_router import thread_router
+
+
+@pytest.fixture(autouse=True)
+def _isolate(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "purge_file", tmp_path / "purge.json")
+    purge._loaded = True  # skip disk load
+    purge.reset_for_testing()
+    thread_router.reset()
+    yield
+    purge.reset_for_testing()
+    thread_router.reset()
+
+
+def _deleted_ts(client: FakeSlackClient) -> list[str]:
+    return [c.kwargs["ts"] for c in client.calls if c.method == "chat_delete"]
+
+
+@pytest.mark.asyncio
+async def test_purge_all_deletes_everything_recorded():
+    purge.record("C1", "1.1", kind="answer")
+    purge.record("C1", "1.2", kind="tool", thread_ts="1.0")
+    client = FakeSlackClient()
+
+    n = await purge.purge(client, "C1")
+
+    assert n == 2
+    assert set(_deleted_ts(client)) == {"1.1", "1.2"}
+    # ledger emptied
+    assert await purge.purge(client, "C1") == 0
+
+
+@pytest.mark.asyncio
+async def test_purge_last_n():
+    for i in range(5):
+        purge.record("C1", f"{i}.0")
+    client = FakeSlackClient()
+
+    n = await purge.purge(client, "C1", count=2)
+
+    assert n == 2
+    assert _deleted_ts(client) == ["3.0", "4.0"]
+
+
+@pytest.mark.asyncio
+async def test_purge_round_only_answers_of_that_round():
+    purge.bump_round("C1")  # round 1
+    purge.record("C1", "r1.ans", kind="answer")
+    purge.record("C1", "r1.ctl", kind="control")
+    purge.record("C1", "r1.tool", kind="tool", thread_ts="r1.parent")
+    purge.bump_round("C1")  # round 2
+    purge.record("C1", "r2.ans", kind="answer")
+    client = FakeSlackClient()
+
+    n = await purge.purge_round(client, "C1", 1)
+
+    assert set(_deleted_ts(client)) == {"r1.ans", "r1.ctl"}  # not the tool, not r2
+    assert n == 2
+
+
+@pytest.mark.asyncio
+async def test_purge_thread_deletes_parent_and_children():
+    purge.record("C1", "p", kind="thread_parent", thread_ts="p")
+    purge.record("C1", "c1", kind="tool", thread_ts="p")
+    purge.record("C1", "c2", kind="thinking", thread_ts="p")
+    purge.record("C1", "other", kind="answer")
+    client = FakeSlackClient()
+
+    n = await purge.purge_thread(client, "C1", "p")
+
+    assert set(_deleted_ts(client)) == {"p", "c1", "c2"}
+    assert n == 3
+    # the unrelated answer survives
+    assert await purge.purge(client, "C1") == 1
+
+
+@pytest.mark.asyncio
+async def test_autopurge_sweep_deletes_old_only():
+    now = time.time()
+    purge.set_autopurge("C1", 1.0)  # 1 hour
+    purge.record("C1", f"{now - 7200:.4f}")  # 2h old → stale
+    purge.record("C1", f"{now - 60:.4f}")  # 1m old → keep
+    client = FakeSlackClient()
+
+    n = await purge.sweep(client)
+
+    assert n == 1
+    assert len(_deleted_ts(client)) == 1
+
+
+def test_autopurge_get_set_off():
+    assert purge.get_autopurge("C1") == 0.0
+    purge.set_autopurge("C1", 2.5)
+    assert purge.get_autopurge("C1") == 2.5
+    purge.set_autopurge("C1", None)
+    assert purge.get_autopurge("C1") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_forget_channel_clears_state():
+    purge.record("C1", "1.1")
+    purge.set_autopurge("C1", 1.0)
+    purge.forget_channel("C1")
+    client = FakeSlackClient()
+    assert await purge.purge(client, "C1") == 0
+    assert purge.get_autopurge("C1") == 0.0
+
+
+# --- duration parsing + commands -------------------------------------------
+
+
+def test_parse_duration():
+    assert _parse_duration("30m") == 1800.0
+    assert _parse_duration("1.5h") == 5400.0
+    assert _parse_duration("2") == 7200.0  # default hours
+    assert _parse_duration("2d") == 172800.0
+    assert _parse_duration("45s") == 45.0
+    assert _parse_duration("nope") is None
+
+
+@pytest.mark.asyncio
+async def test_handle_purge_all(monkeypatch):
+    thread_router.bind_channel("C1", "@1")
+    purge.record("C1", "1.1")
+    purge.record("C1", "1.2")
+    client = FakeSlackClient()
+
+    await _handle_purge(client, "C1", "U1", ["all"])
+
+    assert client.call_count("chat_delete") == 2
+    eph = client.last_call("chat_postEphemeral")
+    assert "Purged 2" in eph.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_handle_purge_last_n(monkeypatch):
+    thread_router.bind_channel("C1", "@1")
+    for i in range(4):
+        purge.record("C1", f"{i}.0")
+    client = FakeSlackClient()
+
+    await _handle_purge(client, "C1", "U1", ["2"])
+
+    assert client.call_count("chat_delete") == 2
+
+
+@pytest.mark.asyncio
+async def test_handle_purge_rejects_unbound():
+    client = FakeSlackClient()
+    await _handle_purge(client, "C0", "U1", ["all"])
+    assert client.call_count("chat_delete") == 0
+    eph = client.last_call("chat_postEphemeral")
+    assert "bound session channel" in eph.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_handle_autopurge_set_and_off():
+    thread_router.bind_channel("C1", "@1")
+    client = FakeSlackClient()
+
+    await _handle_autopurge(client, "C1", "U1", ["1.5h"])
+    assert purge.get_autopurge("C1") == 1.5
+
+    await _handle_autopurge(client, "C1", "U1", ["off"])
+    assert purge.get_autopurge("C1") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_post_response_button_then_round_purge_clears_both():
+    purge.bump_round("C1")  # round 1
+    purge.record("C1", "ans.ts", kind="answer")
+    client = FakeSlackClient()
+    client.returns["chat_postMessage"] = {"ok": True, "ts": "btn.ts"}
+
+    await purge.post_response_button(client, "C1")
+
+    msg = client.last_call("chat_postMessage")
+    assert "ccslack_purge_response" in str(msg.kwargs["blocks"])
+    # Clicking purges the round → the answer AND the button message.
+    await purge.purge_round(client, "C1", 1)
+    assert set(_deleted_ts(client)) == {"ans.ts", "btn.ts"}
+
+
+@pytest.mark.asyncio
+async def test_handle_autopurge_reports_state():
+    thread_router.bind_channel("C1", "@1")
+    purge.set_autopurge("C1", 3.0)
+    client = FakeSlackClient()
+
+    await _handle_autopurge(client, "C1", "U1", [])
+
+    eph = client.last_call("chat_postEphemeral")
+    assert "every 3h" in eph.kwargs["text"]

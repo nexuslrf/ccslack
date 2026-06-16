@@ -144,6 +144,7 @@ All state lives under `$CCSLACK_DIR` (default `~/.ccslack`):
 | `session_map.json` | `ccslack hook` subprocess (after every SessionStart) | `tmux_session:window_id` → session info (`session_id`, `cwd`, `window_name`, `transcript_path`, `provider_name`) |
 | `events.jsonl` | `ccslack hook` subprocess | Append-only event log of every hook event. Bot reads incrementally via byte-offset. |
 | `monitor_state.json` | Bot | Per-session byte offset into the agent's JSONL transcript (so the bot tails new lines after restart). |
+| `purge.json` | Bot | Ledger of ccslack-posted output `ts` per channel + per-channel `autopurge` window, for `/ccslack purge` / `autopurge`. |
 | `mailbox/` | (reserved) | Inter-agent messaging inboxes (not yet wired). |
 | `.env` | You | Configuration overrides. Loaded second after CWD `.env`. |
 

@@ -139,6 +139,8 @@ class Config:
         self.monitor_state_file = self.config_dir / "monitor_state.json"
         self.events_file = self.config_dir / "events.jsonl"
         self.mailbox_dir = self.config_dir / "mailbox"
+        # Ledger of ccslack-posted transcript message ts for /ccslack purge.
+        self.purge_file = self.config_dir / "purge.json"
 
         # Claude Code session monitoring configuration
         _claude_config_dir = os.getenv("CLAUDE_CONFIG_DIR")

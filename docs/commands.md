@@ -326,6 +326,43 @@ of any grants.
 - **Auth**: `adduser`/`removeuser` require `ALLOWED_USERS`; `users` is readable by
   anyone already authorized in the channel.
 
+### `/ccslack purge [N | all | since <dur>]`
+
+Delete **ccslack's own output** from the channel — for tidying up or cutting
+lingering exposure in a public channel.
+
+| Form | Behaviour |
+|---|---|
+| `/ccslack purge` / `purge all` | Delete all recorded output in this channel. |
+| `/ccslack purge 20` | Delete the most recent 20 messages. |
+| `/ccslack purge since 30m` | Delete output posted in the last `30m` / `2h` / `1d`. |
+
+Only messages **ccslack posted** (agent answers, tool chains, thinking, prompt
+echoes) are deleted — never your typed prompts (Slack only lets a bot delete
+its own messages), the pinned **status message**, or **`/ccslack chat`**
+threads. File uploads' messages are removed but the underlying file object may
+linger.
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
+### `/ccslack autopurge [off | Xh]`
+
+Auto-delete this channel's output once it's older than a window. `X` may be a
+float, with `s`/`m`/`h`/`d` units (bare number = hours). No arg reports the
+current setting.
+
+| Form | Behaviour |
+|---|---|
+| `/ccslack autopurge 1.5h` | Delete output older than 1.5 hours (swept every ~5 min). |
+| `/ccslack autopurge 30m` | …older than 30 minutes. |
+| `/ccslack autopurge off` | Disable (default). |
+
+Persisted per-channel (survives restart). Same exclusions as `purge`.
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
 ### `/ccslack kill [target | --all --confirm]`
 
 Tear down sessions.
@@ -452,6 +489,19 @@ offers **🖼️ Render image** / **✖ Dismiss**. Render lays the table(s) out 
 aligned box and uploads a PNG. Controlled globally by `CCSLACK_TABLE_RENDER`
 (default on) — see [configuration](configuration.md).
 
+### Tool-thread Close button
+
+Every tool-chain thread parent (the `🛠️ Tool activity` message) carries a
+**🗑️ Close thread** button that deletes the whole thread — the parent and all
+its tool/thinking replies — in one click.
+
+### Per-response purge button (public channels)
+
+In [public mode](#public-office-mode), each agent answer is followed by a
+**🗑️ Purge this response** button that deletes that round's answer (and the
+button itself). A quick way to wipe one exchange from a shared channel without
+running `/ccslack purge`. See `/ccslack purge` for the bulk/auto forms.
+
 ---
 
 ## CLI commands (run from your terminal)
@@ -501,6 +551,13 @@ Setup deltas vs the default manifest:
 > can't stop the agent from echoing a secret into the transcript. Don't run
 > secret-bearing sessions this way.
 
+To cut *lingering* exposure, public mode adds a **🗑️ Purge this response**
+button after each answer, and you can `/ccslack purge` on demand or
+`/ccslack autopurge Xh` to auto-delete output after X hours. Note these reduce
+casual visibility but aren't a confidentiality guarantee — Slack retains
+content server-side (eDiscovery/exports), and anyone already looking has seen
+it.
+
 ---
 
 ## Permission summary
@@ -512,7 +569,7 @@ Setup deltas vs the default manifest:
 | Dashboard 🗑️ Kill button | `ALLOWED_USERS` |
 | `/ccslack kill --all`, kill by `<#channel>` / `C…` / `@N` | `ALLOWED_USERS` |
 | `/ccslack kill` (from session channel) | Channel membership |
-| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `yolo`, `chat`, `users` | Channel membership* |
+| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `yolo`, `chat`, `users`, `purge`, `autopurge` | Channel membership* |
 | `/ccslack here` (bind current channel) | `ALLOWED_USERS` |
 | `/ccslack adduser`, `removeuser` | `ALLOWED_USERS` |
 | `/ccslack send` outside the cwd | `ALLOWED_USERS` (on top of channel membership) |

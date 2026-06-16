@@ -334,6 +334,8 @@ def register(app) -> None:  # noqa: ANN001
         clear_channel(channel_id)
         thread_router.clear_chat_threads(channel_id)
         thread_router.clear_channel_grants(channel_id)
+        from .purge import forget_channel as _purge_forget
+        _purge_forget(channel_id)
 
         # Best-effort: archive the channel.
         try:

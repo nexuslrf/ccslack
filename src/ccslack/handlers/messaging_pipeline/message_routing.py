@@ -126,6 +126,10 @@ async def _route_to_channel(
     # so the new exchange starts with a clean parent.
     if msg.role == "user":
         await turn_threads.note_user_message(client, channel_id)
+        # New conversation round — scopes the per-response purge button.
+        from .. import purge
+
+        purge.bump_round(channel_id)
 
     # tool_use of an interactive tool name → enter the live picker. Skip the
     # normal post; the picker carries the pane content live.
@@ -198,6 +202,15 @@ async def _route_to_channel(
 
         await maybe_offer_table_render(client, channel_id, text)
 
+    # Public-channel mode: offer a one-click "purge this response" button after
+    # an agent answer, so output can be wiped from the shared channel.
+    from ...config import config
+
+    if config.public_channels and msg.role != "user" and msg.content_type == "text":
+        from .. import purge
+
+        await purge.post_response_button(client, channel_id)
+
     # No-hooks turn-end signal: the agent's final answer closes the thread.
     # The Stop hook also calls end_turn (idempotent), so this is just a
     # backstop for providers / setups without hooks.
@@ -231,6 +244,17 @@ def _decorate(msg: NewMessage, text: str) -> str:
     return text
 
 
+def _purge_kind(msg: NewMessage) -> str:
+    """Map a transcript message to a purge-ledger kind."""
+    if msg.role == "user":
+        return "echo"
+    if msg.content_type in ("tool_use", "tool_result"):
+        return "tool"
+    if msg.content_type == "thinking":
+        return "thinking"
+    return "answer"
+
+
 async def _post_or_pair(
     client: SlackClient,
     channel_id: str,
@@ -238,7 +262,7 @@ async def _post_or_pair(
     decorated: str,
     *,
     thread_ts: str | None = None,
-) -> None:
+) -> str | None:
     """Post a transcript chunk OR pair it with a prior tool_use.
 
     ``thread_ts`` (when set) lands the message inside a Slack thread — used by
@@ -256,6 +280,8 @@ async def _post_or_pair(
         restart).
       * Everything else — straight post.
     """
+    from .. import purge
+
     if msg.content_type == "tool_use" and msg.tool_use_id:
         ts = await safe_post(
             client, channel=channel_id, text=decorated, thread_ts=thread_ts
@@ -266,7 +292,8 @@ async def _post_or_pair(
                 ts,
                 decorated,
             )
-        return
+            purge.record(channel_id, ts, thread_ts=thread_ts, kind="tool")
+        return ts
 
     if msg.content_type == "tool_result" and msg.tool_use_id:
         session_memo = _TOOL_USE_MEMO.get(msg.session_id, {})
@@ -279,10 +306,13 @@ async def _post_or_pair(
                     client, channel=channel_id, ts=prior_ts, text=combined
                 )
                 if ok:
-                    return
+                    # No new message — the tool_use ts is already recorded.
+                    return prior_ts
         # No memo or chat.update failed — fall through to fresh post.
 
-    await safe_post(client, channel=channel_id, text=decorated, thread_ts=thread_ts)
+    ts = await safe_post(client, channel=channel_id, text=decorated, thread_ts=thread_ts)
+    purge.record(channel_id, ts, thread_ts=thread_ts, kind=_purge_kind(msg))
+    return ts
 
 
 __all__ = ["handle_new_message"]

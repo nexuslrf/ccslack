@@ -38,6 +38,21 @@ async def test_subsequent_messages_reuse_parent(client):
 
 
 @pytest.mark.asyncio
+async def test_parent_carries_close_button(client):
+    await turn_threads.thread_parent_for(client, "C0", is_tool=True)
+    post = client.last_call("chat_postMessage")
+    assert "ccslack_purge_thread" in str(post.kwargs.get("blocks", ""))
+
+
+@pytest.mark.asyncio
+async def test_end_turn_keeps_close_button(client):
+    await turn_threads.thread_parent_for(client, "C0", is_tool=True)
+    await turn_threads.end_turn(client, "C0")
+    upd = client.last_call("chat_update")
+    assert "ccslack_purge_thread" in str(upd.kwargs.get("blocks", ""))
+
+
+@pytest.mark.asyncio
 async def test_end_turn_summarises_tool_count(client):
     await turn_threads.thread_parent_for(client, "C0", is_tool=True)
     await turn_threads.thread_parent_for(client, "C0", is_tool=True)

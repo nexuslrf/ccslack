@@ -230,6 +230,8 @@ def register(app: AsyncApp) -> None:
             "adduser",
             "removeuser",
             "users",
+            "purge",
+            "autopurge",
             "help",
             "?",
             "-h",
@@ -299,6 +301,14 @@ def register(app: AsyncApp) -> None:
 
         if sub == "users":
             await _handle_users(client, channel_id, user_id)
+            return
+
+        if sub == "purge":
+            await _handle_purge(client, channel_id, user_id, args)
+            return
+
+        if sub == "autopurge":
+            await _handle_autopurge(client, channel_id, user_id, args)
             return
 
         if sub == "mute":
@@ -408,6 +418,10 @@ def _help_text() -> str:
         "session (for channels you created + invited the bot to).\n"
         f"• `{slash} adduser @user` / `removeuser @user` / `users` — manage "
         "who may drive this session (public mode; `ALLOWED_USERS` only).\n"
+        f"• `{slash} purge [N|all|since <dur>]` — delete ccslack's own output "
+        "in this channel (not your messages or chat threads).\n"
+        f"• `{slash} autopurge [off|Xh]` — auto-delete output older than X "
+        "hours (default off).\n"
         f"• `{slash} help` — this message."
     )
 
@@ -1291,6 +1305,140 @@ async def _handle_users(client, channel_id: str, user_id: str) -> None:  # noqa:
     )
 
 
+_DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([smhd])?$")
+_UNIT_SECONDS = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}
+
+
+def _parse_duration(text: str, *, default_unit: str = "h") -> float | None:
+    """Parse ``30m`` / ``1.5h`` / ``2`` (default hours) → seconds. None if bad."""
+    match = _DURATION_RE.match(text.strip().lower())
+    if not match:
+        return None
+    return float(match.group(1)) * _UNIT_SECONDS[match.group(2) or default_unit]
+
+
+async def _handle_purge(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    args: list[str],
+) -> None:
+    """``/ccslack purge [N | all | since <dur>]`` — delete ccslack's own output.
+
+    Never touches the user's typed messages, the pinned status message, or
+    ``/ccslack chat`` threads (those are never recorded for purging).
+    """
+    if thread_router.get_window_for_channel(channel_id) is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `purge` only works inside a bound session channel.",
+        )
+        return
+
+    from . import purge as purge_mod
+
+    count: int | None = None
+    since_seconds: float | None = None
+    if not args or args[0].lower() == "all":
+        pass
+    elif args[0].lower() == "since":
+        since_seconds = _parse_duration(args[1]) if len(args) > 1 else None
+        if since_seconds is None:
+            await _post_ephemeral(
+                client.chat_postEphemeral,
+                channel=channel_id,
+                user=user_id,
+                text=f"ccslack: usage `{config.slash_command} purge since <30m|2h|1d>`.",
+            )
+            return
+    elif args[0].isdigit():
+        count = int(args[0])
+    else:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: usage `{config.slash_command} purge "
+                "[N | all | since <dur>]`."
+            ),
+        )
+        return
+
+    deleted = await purge_mod.purge(
+        client, channel_id, count=count, since_seconds=since_seconds
+    )
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=f":wastebasket: Purged {deleted} message(s).",
+    )
+
+
+async def _handle_autopurge(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    args: list[str],
+) -> None:
+    """``/ccslack autopurge [off | Xh]`` — auto-delete output older than X hours."""
+    if thread_router.get_window_for_channel(channel_id) is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `autopurge` only works inside a bound session channel.",
+        )
+        return
+
+    from . import purge as purge_mod
+
+    if not args:
+        hours = purge_mod.get_autopurge(channel_id)
+        state = f"every {hours:g}h" if hours > 0 else "off"
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack: autopurge is *{state}* for this session.",
+        )
+        return
+
+    if args[0].lower() in ("off", "0", "none"):
+        purge_mod.set_autopurge(channel_id, None)
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=":recycle: autopurge *off* for this session.",
+        )
+        return
+
+    seconds = _parse_duration(args[0])
+    if seconds is None or seconds <= 0:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack: usage `{config.slash_command} autopurge [off | 1.5h | 30m]`.",
+        )
+        return
+    hours = seconds / 3600.0
+    purge_mod.set_autopurge(channel_id, hours)
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=(
+            f":recycle: autopurge *on* — output is deleted after {hours:g}h "
+            "(the pinned status + chat threads are kept)."
+        ),
+    )
+
+
 async def _handle_mute(
     client,  # noqa: ANN001
     channel_id: str,
@@ -1401,6 +1549,8 @@ async def _kill_one(client, channel_id: str, window_id: str) -> str:  # noqa: AN
     clear_channel(channel_id)
     thread_router.clear_chat_threads(channel_id)
     thread_router.clear_channel_grants(channel_id)
+    from .purge import forget_channel as _purge_forget
+    _purge_forget(channel_id)
 
     try:
         await bolt_client.conversations_archive(channel=channel_id)

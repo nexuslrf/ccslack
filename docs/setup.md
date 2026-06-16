@@ -362,4 +362,5 @@ state.json            # channel_bindings, window_states, display_names
 session_map.json      # hook-written window→session map
 events.jsonl          # append-only hook event log
 monitor_state.json    # byte offsets the transcript reader has consumed
+purge.json            # ledger of posted output ts + per-channel autopurge
 ```
