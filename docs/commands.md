@@ -498,11 +498,11 @@ its tool/thinking replies — in one click.
 
 ### Remove-file button
 
-Every uploaded file — a `/screenshot` PNG or a `/ccslack send` file — is
-followed by a **🗑️ Remove file** button. Clicking it deletes the file via
-`files.delete` (removing it from the channel entirely, not just hiding the
-message) along with the button. `/ccslack purge` and `autopurge` also remove
-these files.
+Every uploaded file — a `/screenshot` PNG, a `/ccslack send` file, or a
+rendered-table image — is followed by a **🗑️ Remove file** button. Clicking it
+deletes the file via `files.delete` (removing it from the channel entirely, not
+just hiding the message) along with the button. `/ccslack purge` and
+`autopurge` also remove these files.
 
 ### Per-response purge button (public channels)
 

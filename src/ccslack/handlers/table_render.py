@@ -270,7 +270,7 @@ def register(app: AsyncApp) -> None:
 
         bolt_client = BoltSlackClient(client)
         try:
-            await bolt_client.files_upload_v2(
+            result = await bolt_client.files_upload_v2(
                 channel=channel_id,
                 file=io.BytesIO(png),
                 filename="table.png",
@@ -282,6 +282,13 @@ def register(app: AsyncApp) -> None:
                 exc.response.get("error") if exc.response else exc,
             )
             return
+
+        # Attach a one-click Remove button so the rendered image can be deleted.
+        from . import purge
+
+        file_id = purge.file_id_from_upload(result)
+        if file_id:
+            await purge.post_file_close_button(bolt_client, channel_id, file_id)
 
         # Collapse the prompt once rendered so it can't be re-clicked.
         if message_ts:
