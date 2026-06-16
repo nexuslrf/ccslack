@@ -338,10 +338,11 @@ lingering exposure in a public channel.
 | `/ccslack purge since 30m` | Delete output posted in the last `30m` / `2h` / `1d`. |
 
 Only messages **ccslack posted** (agent answers, tool chains, thinking, prompt
-echoes, and **shell command output**) are deleted — never your typed prompts
-(Slack only lets a bot delete its own messages), the pinned **status message**,
-or **`/ccslack chat`** threads. File uploads' messages are removed but the
-underlying file object may linger.
+echoes, shell command output, and **uploaded files** — screenshots / `send`)
+are deleted — never your typed prompts (Slack only lets a bot delete its own
+messages), the pinned **status message**, or **`/ccslack chat`** threads.
+Uploaded files are removed via `files.delete`, so the underlying file object
+goes too — not just the message.
 
 - **Where**: a bound session channel.
 - **Auth**: channel membership.
@@ -494,6 +495,14 @@ aligned box and uploads a PNG. Controlled globally by `CCSLACK_TABLE_RENDER`
 Every tool-chain thread parent (the `🛠️ Tool activity` message) carries a
 **🗑️ Close thread** button that deletes the whole thread — the parent and all
 its tool/thinking replies — in one click.
+
+### Remove-file button
+
+Every uploaded file — a `/screenshot` PNG or a `/ccslack send` file — is
+followed by a **🗑️ Remove file** button. Clicking it deletes the file via
+`files.delete` (removing it from the channel entirely, not just hiding the
+message) along with the button. `/ccslack purge` and `autopurge` also remove
+these files.
 
 ### Per-response purge button (public channels)
 

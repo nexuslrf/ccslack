@@ -73,7 +73,7 @@ async def upload_screenshot(
     bolt_client = BoltSlackClient(client)
     display = thread_router.get_display_name(window_id)
     try:
-        await bolt_client.files_upload_v2(
+        result = await bolt_client.files_upload_v2(
             channel=channel_id,
             file=io.BytesIO(png),
             filename=f"{display or window_id}.png",
@@ -92,6 +92,13 @@ async def upload_screenshot(
                     text="ccslack: file upload failed — check `files:write` scope.",
                 )
         return False
+
+    # Attach a one-click Remove button so the screenshot can be deleted.
+    from . import purge
+
+    file_id = purge.file_id_from_upload(result)
+    if file_id:
+        await purge.post_file_close_button(bolt_client, channel_id, file_id)
     return True
 
 

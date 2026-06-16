@@ -126,6 +126,42 @@ async def test_ledger_and_autopurge_survive_reload():
     assert await purge.purge(client, "C1") == 1  # the reloaded entry
 
 
+def test_file_id_from_upload_shapes():
+    assert purge.file_id_from_upload({"files": [{"id": "F1"}]}) == "F1"
+    assert purge.file_id_from_upload({"file": {"id": "F2"}}) == "F2"
+    assert purge.file_id_from_upload({"ok": True}) == ""
+    assert purge.file_id_from_upload(None) == ""
+
+
+def _files_deleted(client: FakeSlackClient) -> list[str]:
+    return [c.kwargs["file"] for c in client.calls if c.method == "files_delete"]
+
+
+@pytest.mark.asyncio
+async def test_file_close_button_records_and_delete_file_removes_both():
+    client = FakeSlackClient()
+    client.returns["chat_postMessage"] = {"ok": True, "ts": "btn.ts"}
+
+    await purge.post_file_close_button(client, "C1", "F123")
+
+    # Clicking Remove deletes the file AND the button message.
+    await purge.delete_file(client, "C1", "F123", "btn.ts")
+    assert _files_deleted(client) == ["F123"]
+    assert "btn.ts" in _deleted_ts(client)
+
+
+@pytest.mark.asyncio
+async def test_purge_all_also_deletes_recorded_files():
+    purge.record("C1", "btn.ts", kind="file", file_id="F9")
+    purge.record("C1", "ans.ts", kind="answer")
+    client = FakeSlackClient()
+
+    await purge.purge(client, "C1")
+
+    assert _files_deleted(client) == ["F9"]
+    assert set(_deleted_ts(client)) == {"btn.ts", "ans.ts"}
+
+
 @pytest.mark.asyncio
 async def test_forget_channel_clears_state():
     purge.record("C1", "1.1")

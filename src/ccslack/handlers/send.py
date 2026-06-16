@@ -272,20 +272,27 @@ async def _upload_one(
     emoji = ":frame_with_picture:" if _is_image(resolved) else ":outbox_tray:"
     bolt_client = BoltSlackClient(client)
     try:
-        await bolt_client.files_upload_v2(
+        result = await bolt_client.files_upload_v2(
             channel=channel_id,
             file=str(resolved),
             filename=resolved.name,
             title=rel,
             initial_comment=f"{emoji} `{rel}` ({resolved.stat().st_size} bytes)",
         )
-        return True
     except SlackApiError as exc:
         error = exc.response.get("error") if exc.response else str(exc)
         await _ephemeral(
             client, channel_id, user_id, f"ccslack: upload failed — `{error}`"
         )
         return False
+
+    # Attach a one-click Remove button so the sent file can be deleted.
+    from . import purge
+
+    file_id = purge.file_id_from_upload(result)
+    if file_id:
+        await purge.post_file_close_button(bolt_client, channel_id, file_id)
+    return True
 
 
 async def _post_picker(

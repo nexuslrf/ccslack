@@ -121,15 +121,26 @@ def record(
     *,
     thread_ts: str | None = None,
     kind: str = "answer",
+    file_id: str | None = None,
 ) -> None:
-    """Record a ccslack-posted transcript message so it can be purged later."""
+    """Record a ccslack-posted message so it can be purged later.
+
+    ``file_id`` (for uploads) is also deleted via ``files.delete`` on purge, so
+    the underlying file object is removed — not just the message.
+    """
     if not channel_id or not ts:
         return
     _ensure_loaded()
+    entry: dict[str, Any] = {
+        "ts": ts,
+        "thread": thread_ts,
+        "round": _round.get(channel_id, 0),
+        "kind": kind,
+    }
+    if file_id:
+        entry["file"] = file_id
     entries = _ledger.setdefault(channel_id, [])
-    entries.append(
-        {"ts": ts, "thread": thread_ts, "round": _round.get(channel_id, 0), "kind": kind}
-    )
+    entries.append(entry)
     if len(entries) > _MAX_LEDGER_PER_CHANNEL:
         del entries[: len(entries) - _MAX_LEDGER_PER_CHANNEL]
     _save()
@@ -140,20 +151,29 @@ def record(
 # ---------------------------------------------------------------------------
 
 
-async def _delete_ts(client: SlackClient, channel_id: str, ts_list: list[str]) -> int:
-    """chat.delete each ts (best-effort). Returns how many were deleted."""
+async def _delete_entries(
+    client: SlackClient, channel_id: str, entries: list[dict[str, Any]]
+) -> int:
+    """Delete each entry's message (and its uploaded file). Best-effort count."""
     deleted = 0
-    for ts in ts_list:
-        try:
-            await client.chat_delete(channel=channel_id, ts=ts)
-            deleted += 1
-        except SlackApiError as exc:
-            error = exc.response.get("error") if exc.response else str(exc)
-            # message_not_found = already gone; treat as success for cleanup.
-            if error in ("message_not_found", "already_deleted"):
-                deleted += 1
-            else:
-                logger.debug("purge: chat.delete %s failed: %s", ts, error)
+    for entry in entries:
+        ts = entry.get("ts")
+        if ts:
+            try:
+                await client.chat_delete(channel=channel_id, ts=ts)
+            except SlackApiError as exc:
+                error = exc.response.get("error") if exc.response else str(exc)
+                if error not in ("message_not_found", "already_deleted"):
+                    logger.debug("purge: chat.delete %s failed: %s", ts, error)
+        file_id = entry.get("file")
+        if file_id:
+            try:
+                await client.files_delete(file=file_id)
+            except SlackApiError as exc:
+                error = exc.response.get("error") if exc.response else str(exc)
+                if error not in ("file_not_found", "file_deleted"):
+                    logger.debug("purge: files.delete %s failed: %s", file_id, error)
+        deleted += 1
     return deleted
 
 
@@ -187,12 +207,13 @@ async def purge(
         return 0
     if since_seconds is not None:
         cutoff = time.time() - since_seconds
-        entries = [e for e in entries if _ts_age_ok(e["ts"], cutoff)]
+        selected = [e for e in entries if _ts_age_ok(e["ts"], cutoff)]
     elif count is not None:
-        entries = entries[-count:]
-    ts_list = [e["ts"] for e in entries]
-    deleted = await _delete_ts(client, channel_id, ts_list)
-    _drop_entries(channel_id, set(ts_list))
+        selected = entries[-count:]
+    else:
+        selected = entries
+    deleted = await _delete_entries(client, channel_id, selected)
+    _drop_entries(channel_id, {e["ts"] for e in selected})
     return deleted
 
 
@@ -206,26 +227,32 @@ def _ts_age_ok(ts: str, cutoff: float) -> bool:
 async def purge_round(client: SlackClient, channel_id: str, round_id: int) -> int:
     """Delete the answer (+ its control button) messages of one round."""
     _ensure_loaded()
-    ts_list = [
-        e["ts"]
+    selected = [
+        e
         for e in _ledger.get(channel_id, [])
         if e["round"] == round_id and e["kind"] in ("answer", "control")
     ]
-    deleted = await _delete_ts(client, channel_id, ts_list)
-    _drop_entries(channel_id, set(ts_list))
+    deleted = await _delete_entries(client, channel_id, selected)
+    _drop_entries(channel_id, {e["ts"] for e in selected})
     return deleted
 
 
 async def purge_thread(client: SlackClient, channel_id: str, parent_ts: str) -> int:
     """Delete a whole tool-chain thread (parent + all recorded replies)."""
     _ensure_loaded()
-    ts_set = {
-        e["ts"] for e in _ledger.get(channel_id, []) if e["thread"] == parent_ts
-    }
-    ts_set.add(parent_ts)  # the parent itself, even if not recorded
-    deleted = await _delete_ts(client, channel_id, list(ts_set))
-    _drop_entries(channel_id, ts_set)
+    selected = [e for e in _ledger.get(channel_id, []) if e["thread"] == parent_ts]
+    if parent_ts not in {e["ts"] for e in selected}:
+        selected.append({"ts": parent_ts})  # the parent, even if not recorded
+    deleted = await _delete_entries(client, channel_id, selected)
+    _drop_entries(channel_id, {e["ts"] for e in selected})
     return deleted
+
+
+async def delete_file(client: SlackClient, channel_id: str, file_id: str, ts: str) -> None:
+    """Remove an uploaded file (and its Remove-button message at *ts*)."""
+    await _delete_entries(client, channel_id, [{"ts": ts, "file": file_id}])
+    if ts:
+        _drop_entries(channel_id, {ts})
 
 
 # ---------------------------------------------------------------------------
@@ -257,13 +284,13 @@ async def sweep(client: SlackClient) -> int:
     for channel_id, hours in list(_autopurge.items()):
         cutoff = now - hours * 3600.0
         stale = [
-            e["ts"]
+            e
             for e in _ledger.get(channel_id, [])
             if not _ts_age_ok(e["ts"], cutoff)  # older than cutoff
         ]
         if stale:
-            total += await _delete_ts(client, channel_id, stale)
-            _drop_entries(channel_id, set(stale))
+            total += await _delete_entries(client, channel_id, stale)
+            _drop_entries(channel_id, {e["ts"] for e in stale})
     return total
 
 
@@ -314,6 +341,63 @@ async def post_response_button(client: SlackClient, channel_id: str) -> None:
     record(channel_id, ts, kind="control")
 
 
+def file_id_from_upload(result: Any) -> str:
+    """Best-effort extract the uploaded file id from a files_upload_v2 result."""
+    if result is None or not hasattr(result, "get"):
+        return ""
+    files = result.get("files")
+    if (
+        isinstance(files, list)
+        and files
+        and isinstance(files[0], dict)
+        and files[0].get("id")
+    ):
+        return str(files[0]["id"])
+    single = result.get("file")
+    if isinstance(single, dict) and single.get("id"):
+        return str(single["id"])
+    return ""
+
+
+async def post_file_close_button(
+    client: SlackClient, channel_id: str, file_id: str
+) -> None:
+    """Post a 'Remove file' button after an upload (screenshot / send).
+
+    Recorded with the ``file_id`` so a click — or a later purge / autopurge —
+    deletes both the button message and the underlying file.
+    """
+    if not file_id:
+        return
+    _ensure_loaded()
+    from ..slack_sender import safe_post
+
+    ts = await safe_post(
+        client,
+        channel=channel_id,
+        text=":wastebasket: Remove this file?",
+        blocks=[
+            {
+                "type": "actions",
+                "block_id": "ccslack_file_actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": "ccslack_remove_file",
+                        "style": "danger",
+                        "text": {
+                            "type": "plain_text",
+                            "text": ":wastebasket: Remove file",
+                        },
+                        "value": file_id,
+                    }
+                ],
+            }
+        ],
+    )
+    record(channel_id, ts, kind="file", file_id=file_id)
+
+
 # ---------------------------------------------------------------------------
 # Action buttons
 # ---------------------------------------------------------------------------
@@ -351,6 +435,20 @@ def register(app: AsyncApp) -> None:
         if parent_ts:
             await purge_thread(client, channel_id, parent_ts)
 
+    @app.action("ccslack_remove_file")
+    async def on_remove_file(ack, body, client) -> None:  # noqa: ANN001
+        await ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel_id = body.get("channel", {}).get("id", "")
+        from .auth import is_authorized
+
+        if not is_authorized(user_id, channel_id) or not channel_id:
+            return
+        file_id = _action_value(body, "ccslack_remove_file")
+        btn_ts = (body.get("message") or {}).get("ts", "")
+        if file_id:
+            await delete_file(client, channel_id, file_id, btn_ts)
+
 
 def _action_value(body: dict[str, Any], action_id: str) -> str:
     for action in body.get("actions", []) or []:
@@ -362,8 +460,11 @@ def _action_value(body: dict[str, Any], action_id: str) -> str:
 __all__ = [
     "bump_round",
     "current_round",
+    "delete_file",
+    "file_id_from_upload",
     "forget_channel",
     "get_autopurge",
+    "post_file_close_button",
     "post_response_button",
     "purge",
     "purge_round",

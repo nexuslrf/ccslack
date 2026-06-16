@@ -108,6 +108,8 @@ class SlackClient(Protocol):
         **kwargs: Any,
     ) -> AsyncSlackResponse: ...
 
+    async def files_delete(self, *, file: str, **kwargs: Any) -> AsyncSlackResponse: ...
+
     # --- views (modals) ----------------------------------------------
 
     async def views_open(
@@ -249,6 +251,9 @@ class BoltSlackClient:
             initial_comment=initial_comment,
             **kwargs,
         )
+
+    async def files_delete(self, *, file: str, **kwargs: Any) -> AsyncSlackResponse:
+        return await self._web.files_delete(file=file, **kwargs)
 
     async def views_open(
         self, *, trigger_id: str, view: dict[str, Any], **kwargs: Any
@@ -442,6 +447,9 @@ class FakeSlackClient:
                 **kwargs,
             },
         )
+
+    async def files_delete(self, *, file: str, **kwargs: Any) -> Any:
+        return self._record("files_delete", {"file": file, **kwargs})
 
     async def views_open(
         self, *, trigger_id: str, view: dict[str, Any], **kwargs: Any
