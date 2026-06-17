@@ -506,10 +506,12 @@ just hiding the message) along with the button. `/ccslack purge` and
 
 ### Per-response purge button (public channels)
 
-In [public mode](#public-office-mode), each agent answer is followed by a
-**🗑️ Purge this response** button that deletes that round's answer (and the
-button itself). A quick way to wipe one exchange from a shared channel without
-running `/ccslack purge`. See `/ccslack purge` for the bulk/auto forms.
+In [public mode](#public-office-mode), each round gets **one**
+**🗑️ Purge this response** button (after the first output message, not one per
+message). Clicking it deletes that whole round's output and the button. Your
+prompt echo is **kept** — it's edited in place with a "_Responses purged._"
+line so the channel still shows what was asked. A quick way to wipe one
+exchange without running `/ccslack purge`; see that for the bulk/auto forms.
 
 ---
 

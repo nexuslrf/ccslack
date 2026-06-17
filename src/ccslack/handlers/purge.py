@@ -46,6 +46,9 @@ _ledger: dict[str, list[dict[str, Any]]] = {}
 _autopurge: dict[str, float] = {}
 # channel_id -> current conversation round counter.
 _round: dict[str, int] = {}
+# channel_id -> round number a response purge-button was already posted for
+# (so a round with several output messages still shows just ONE button).
+_button_posted: dict[str, int] = {}
 _loaded = False
 
 
@@ -97,6 +100,7 @@ def reset_for_testing() -> None:
     _ledger.clear()
     _autopurge.clear()
     _round.clear()
+    _button_posted.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -122,11 +126,14 @@ def record(
     thread_ts: str | None = None,
     kind: str = "answer",
     file_id: str | None = None,
+    text: str | None = None,
 ) -> None:
     """Record a ccslack-posted message so it can be purged later.
 
     ``file_id`` (for uploads) is also deleted via ``files.delete`` on purge, so
-    the underlying file object is removed — not just the message.
+    the underlying file object is removed — not just the message. ``text`` is
+    kept for the user-echo entry so purge can annotate it in place rather than
+    delete it.
     """
     if not channel_id or not ts:
         return
@@ -139,6 +146,8 @@ def record(
     }
     if file_id:
         entry["file"] = file_id
+    if text is not None:
+        entry["text"] = text
     entries = _ledger.setdefault(channel_id, [])
     entries.append(entry)
     if len(entries) > _MAX_LEDGER_PER_CHANNEL:
@@ -224,16 +233,41 @@ def _ts_age_ok(ts: str, cutoff: float) -> bool:
         return False
 
 
+_ECHO_PURGED_NOTE = "\n\n_:wastebasket: Responses purged._"
+
+
 async def purge_round(client: SlackClient, channel_id: str, round_id: int) -> int:
-    """Delete the answer (+ its control button) messages of one round."""
+    """Delete the answer (+ its control button) messages of one round.
+
+    The user's prompt echo is kept (not deleted) but annotated in place with a
+    line noting its outputs were purged, so the channel still shows what was
+    asked.
+    """
     _ensure_loaded()
+    ledger = _ledger.get(channel_id, [])
     selected = [
         e
-        for e in _ledger.get(channel_id, [])
+        for e in ledger
         if e["round"] == round_id and e["kind"] in ("answer", "control")
     ]
     deleted = await _delete_entries(client, channel_id, selected)
     _drop_entries(channel_id, {e["ts"] for e in selected})
+
+    if deleted:
+        echo = next(
+            (e for e in ledger if e["round"] == round_id and e["kind"] == "echo"),
+            None,
+        )
+        if echo and echo.get("text") and _ECHO_PURGED_NOTE not in echo["text"]:
+            from ..slack_sender import safe_update
+
+            new_text = echo["text"] + _ECHO_PURGED_NOTE
+            with contextlib.suppress(SlackApiError):
+                await safe_update(
+                    client, channel=channel_id, ts=echo["ts"], text=new_text
+                )
+            echo["text"] = new_text  # keep idempotent if re-run
+            _save()
     return deleted
 
 
@@ -300,18 +334,23 @@ def forget_channel(channel_id: str) -> None:
     had_ledger = _ledger.pop(channel_id, None) is not None
     had_auto = _autopurge.pop(channel_id, None) is not None
     _round.pop(channel_id, None)
+    _button_posted.pop(channel_id, None)
     if had_ledger or had_auto:
         _save()
 
 
 async def post_response_button(client: SlackClient, channel_id: str) -> None:
-    """Post a trailing 'Purge this response' button for the current round.
+    """Post ONE 'Purge this response' button per round (after the first output).
 
-    Recorded as ``control`` for the round so a later purge / round-purge sweeps
-    the button away with the answer it belongs to.
+    A round can emit several output messages; we only offer a single button for
+    it (clicking purges the whole round), so the channel doesn't fill with a
+    button per message. Recorded as ``control`` so a later purge sweeps it too.
     """
     _ensure_loaded()
     round_id = _round.get(channel_id, 0)
+    if _button_posted.get(channel_id) == round_id:
+        return  # already offered a button for this round
+    _button_posted[channel_id] = round_id
     # Lazy: slack_sender pulls config + formatting helpers.
     from ..slack_sender import safe_post
 

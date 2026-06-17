@@ -311,7 +311,15 @@ async def _post_or_pair(
         # No memo or chat.update failed — fall through to fresh post.
 
     ts = await safe_post(client, channel=channel_id, text=decorated, thread_ts=thread_ts)
-    purge.record(channel_id, ts, thread_ts=thread_ts, kind=_purge_kind(msg))
+    kind = _purge_kind(msg)
+    # Keep the echo's text so a purge can annotate it in place (not delete it).
+    purge.record(
+        channel_id,
+        ts,
+        thread_ts=thread_ts,
+        kind=kind,
+        text=decorated if kind == "echo" else None,
+    )
     return ts
 
 

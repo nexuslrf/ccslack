@@ -248,6 +248,46 @@ async def test_post_response_button_then_round_purge_clears_both():
 
 
 @pytest.mark.asyncio
+async def test_response_button_posted_once_per_round():
+    purge.bump_round("C1")  # round 1
+    client = FakeSlackClient()
+    client.set_side_effect(
+        "chat_postMessage",
+        [{"ok": True, "ts": "b1"}, {"ok": True, "ts": "b2"}],
+    )
+
+    # Several output messages in the same round → only ONE button.
+    await purge.post_response_button(client, "C1")
+    await purge.post_response_button(client, "C1")
+    assert client.call_count("chat_postMessage") == 1
+
+    # A new round offers a button again.
+    purge.bump_round("C1")
+    await purge.post_response_button(client, "C1")
+    assert client.call_count("chat_postMessage") == 2
+
+
+@pytest.mark.asyncio
+async def test_purge_round_annotates_echo_without_deleting_it():
+    purge.bump_round("C1")  # round 1
+    purge.record("C1", "echo.ts", kind="echo", text=":bust_in_silhouette: do X")
+    purge.record("C1", "ans.ts", kind="answer")
+    client = FakeSlackClient()
+
+    await purge.purge_round(client, "C1", 1)
+
+    # Answer deleted; echo NOT deleted.
+    assert "ans.ts" in _deleted_ts(client)
+    assert "echo.ts" not in _deleted_ts(client)
+    # Echo edited in place to note the purge, preserving the prompt.
+    upd = client.last_call("chat_update")
+    assert upd is not None
+    assert upd.kwargs["ts"] == "echo.ts"
+    assert "do X" in str(upd.kwargs)
+    assert "purged" in str(upd.kwargs).lower()
+
+
+@pytest.mark.asyncio
 async def test_handle_autopurge_reports_state():
     thread_router.bind_channel("C1", "@1")
     purge.set_autopurge("C1", 3.0)
