@@ -357,7 +357,7 @@ async def post_response_button(client: SlackClient, channel_id: str) -> None:
     ts = await safe_post(
         client,
         channel=channel_id,
-        text=":wastebasket: Purge this response?",
+        text=":wastebasket: Purge",
         blocks=[
             {
                 "type": "actions",
@@ -367,10 +367,7 @@ async def post_response_button(client: SlackClient, channel_id: str) -> None:
                         "type": "button",
                         "action_id": "ccslack_purge_response",
                         "style": "danger",
-                        "text": {
-                            "type": "plain_text",
-                            "text": ":wastebasket: Purge this response",
-                        },
+                        "text": {"type": "plain_text", "text": ":wastebasket: Purge"},
                         "value": str(round_id),
                     }
                 ],
@@ -414,7 +411,7 @@ async def post_file_close_button(
     ts = await safe_post(
         client,
         channel=channel_id,
-        text=":wastebasket: Remove this file?",
+        text=":wastebasket: Remove",
         blocks=[
             {
                 "type": "actions",
@@ -424,10 +421,7 @@ async def post_file_close_button(
                         "type": "button",
                         "action_id": "ccslack_remove_file",
                         "style": "danger",
-                        "text": {
-                            "type": "plain_text",
-                            "text": ":wastebasket: Remove file",
-                        },
+                        "text": {"type": "plain_text", "text": ":wastebasket: Remove"},
                         "value": file_id,
                     }
                 ],

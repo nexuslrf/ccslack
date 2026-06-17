@@ -49,7 +49,7 @@ def _parent_blocks(text: str) -> list[dict]:
                     "type": "button",
                     "action_id": "ccslack_purge_thread",
                     "style": "danger",
-                    "text": {"type": "plain_text", "text": ":wastebasket: Close thread"},
+                    "text": {"type": "plain_text", "text": ":wastebasket: Close"},
                     "value": "thread",
                 }
             ],

@@ -191,6 +191,15 @@ async def _route_to_channel(
             client, channel_id, is_tool=msg.content_type == "tool_use"
         )
 
+    # Public-channel mode: post the round's single "purge" button just BEFORE
+    # its first answer so it sits above the responses (deduped per round).
+    from ...config import config
+
+    if config.public_channels and msg.role != "user" and msg.content_type == "text":
+        from .. import purge
+
+        await purge.post_response_button(client, channel_id)
+
     decorated = _decorate(msg, text)
     await _post_or_pair(client, channel_id, msg, decorated, thread_ts=thread_ts)
 
@@ -201,15 +210,6 @@ async def _route_to_channel(
         from ..table_render import maybe_offer_table_render
 
         await maybe_offer_table_render(client, channel_id, text)
-
-    # Public-channel mode: offer a one-click "purge this response" button after
-    # an agent answer, so output can be wiped from the shared channel.
-    from ...config import config
-
-    if config.public_channels and msg.role != "user" and msg.content_type == "text":
-        from .. import purge
-
-        await purge.post_response_button(client, channel_id)
 
     # No-hooks turn-end signal: the agent's final answer closes the thread.
     # The Stop hook also calls end_turn (idempotent), so this is just a

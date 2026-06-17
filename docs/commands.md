@@ -493,25 +493,25 @@ aligned box and uploads a PNG. Controlled globally by `CCSLACK_TABLE_RENDER`
 ### Tool-thread Close button
 
 Every tool-chain thread parent (the `🛠️ Tool activity` message) carries a
-**🗑️ Close thread** button that deletes the whole thread — the parent and all
-its tool/thinking replies — in one click.
+**🗑️ Close** button that deletes the whole thread — the parent and all its
+tool/thinking replies — in one click.
 
 ### Remove-file button
 
 Every uploaded file — a `/screenshot` PNG, a `/ccslack send` file, or a
-rendered-table image — is followed by a **🗑️ Remove file** button. Clicking it
+rendered-table image — is followed by a **🗑️ Remove** button. Clicking it
 deletes the file via `files.delete` (removing it from the channel entirely, not
 just hiding the message) along with the button. `/ccslack purge` and
 `autopurge` also remove these files.
 
 ### Per-response purge button (public channels)
 
-In [public mode](#public-office-mode), each round gets **one**
-**🗑️ Purge this response** button (after the first output message, not one per
-message). Clicking it deletes that whole round's output and the button. Your
-prompt echo is **kept** — it's edited in place with a "_Responses purged._"
-line so the channel still shows what was asked. A quick way to wipe one
-exchange without running `/ccslack purge`; see that for the bulk/auto forms.
+In [public mode](#public-office-mode), each round gets **one** **🗑️ Purge**
+button, posted just **before** the round's responses (not one per message).
+Clicking it deletes that whole round's output and the button. Your prompt echo
+is **kept** — it's edited in place with a "_Responses purged._" line so the
+channel still shows what was asked. A quick way to wipe one exchange without
+running `/ccslack purge`; see that for the bulk/auto forms.
 
 ---
 
@@ -562,8 +562,8 @@ Setup deltas vs the default manifest:
 > can't stop the agent from echoing a secret into the transcript. Don't run
 > secret-bearing sessions this way.
 
-To cut *lingering* exposure, public mode adds a **🗑️ Purge this response**
-button after each answer, and you can `/ccslack purge` on demand or
+To cut *lingering* exposure, public mode adds a **🗑️ Purge** button before
+each answer, and you can `/ccslack purge` on demand or
 `/ccslack autopurge Xh` to auto-delete output after X hours. Note these reduce
 casual visibility but aren't a confidentiality guarantee — Slack retains
 content server-side (eDiscovery/exports), and anyone already looking has seen
