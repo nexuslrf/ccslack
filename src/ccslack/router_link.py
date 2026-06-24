@@ -40,6 +40,8 @@ _BACKOFF_MAX = 30.0
 _PING_INTERVAL = 15.0
 
 Connect = Callable[[], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]]
+# Posts a short fleet status line to the meta channel (host up/down). Best-effort.
+Notify = Callable[[str], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -156,13 +158,29 @@ class SshTunnel:
 class WorkerLink:
     """Router-side link client to one worker (over the tunnel's local port)."""
 
-    def __init__(self, host: str, connect: Connect, router: Router) -> None:
+    def __init__(
+        self,
+        host: str,
+        connect: Connect,
+        router: Router,
+        notify: Notify | None = None,
+    ) -> None:
         self._host = host
         self._connect = connect
         self._router = router
+        self._notify = notify
         self._writer: asyncio.StreamWriter | None = None
         self._task: asyncio.Task[None] | None = None
         self._stopping = False
+        self._was_connected = False
+
+    async def _announce(self, text: str) -> None:
+        if self._notify is None:
+            return
+        try:
+            await self._notify(text)
+        except Exception:  # noqa: BLE001 — notification must not break the link
+            logger.exception("fleet notify failed")
 
     async def start(self) -> None:
         self._stopping = False
@@ -202,6 +220,8 @@ class WorkerLink:
             backoff = _BACKOFF_START
             self._writer = writer
             logger.info("worker link connected: %s", self._host)
+            await self._announce(f":satellite: host `{self._host}` connected.")
+            self._was_connected = True
             ping = asyncio.create_task(self._ping_loop(writer))
             try:
                 while True:
@@ -218,6 +238,12 @@ class WorkerLink:
                 with contextlib.suppress(Exception):
                     writer.close()
                 logger.warning("worker link to %s disconnected", self._host)
+                if self._was_connected and not self._stopping:
+                    self._was_connected = False
+                    await self._announce(
+                        f":warning: host `{self._host}` disconnected — reconnecting "
+                        "(may need manual SSH auth at the router console)."
+                    )
             if not self._stopping:
                 await asyncio.sleep(backoff)
 
@@ -249,9 +275,15 @@ class WorkerLink:
 class RouterFleet:
     """Owns the SSH tunnels + worker links and wires the router's forwarder."""
 
-    def __init__(self, router: Router, workers: list[WorkerSpec]) -> None:
+    def __init__(
+        self,
+        router: Router,
+        workers: list[WorkerSpec],
+        notify: Notify | None = None,
+    ) -> None:
         self._router = router
         self._workers = workers
+        self._notify = notify
         self._tunnels: dict[str, SshTunnel] = {}
         self._links: dict[str, WorkerLink] = {}
 
@@ -265,7 +297,9 @@ class RouterFleet:
             ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
                 return await asyncio.open_connection("127.0.0.1", t.local_port)
 
-            worker_link = WorkerLink(spec.host, _connect, self._router)
+            worker_link = WorkerLink(
+                spec.host, _connect, self._router, notify=self._notify
+            )
             await worker_link.start()
             self._tunnels[spec.host] = tunnel
             self._links[spec.host] = worker_link

@@ -381,12 +381,14 @@ def _help_text() -> str:
     slash = config.slash_command
     return (
         "*ccslack commands*\n"
-        f"• `{slash} new <directory> [provider] [--worktree [branch]] [--yolo]` "
-        "— start a new session.\n"
+        f"• `{slash} new <directory> [provider] [--worktree [branch]] [--yolo] "
+        "[--host <name>]` — start a new session.\n"
         "    provider ∈ {claude, codex, gemini, pi, shell}; default: "
         f"`{config.provider_name}`.\n"
         "    `--yolo` launches claude/codex/gemini with approvals skipped "
         "(dangerous).\n"
+        "    `--host <name>` runs the session on a specific fleet host "
+        "(multi-host router).\n"
         f"• `{slash} list` — quick list of active sessions.\n"
         f"• `{slash} sessions` — interactive dashboard with per-session kill.\n"
         f"• `{slash} history [N]` — last N transcript messages in this channel.\n"
@@ -442,10 +444,11 @@ async def _handle_new(
         )
         return
 
-    # Parse optional --worktree [branch-name] and --yolo flags out of args.
+    # Parse optional --worktree [branch-name], --yolo, and --host <name> flags.
     want_worktree = False
     want_yolo = False
     worktree_branch: str | None = None
+    want_host: str | None = None
     cleaned: list[str] = []
     i = 0
     while i < len(args):
@@ -459,10 +462,36 @@ async def _handle_new(
                 continue
         elif a in ("--yolo", "--dangerous"):
             want_yolo = True
+        elif a == "--host":
+            nxt = args[i + 1] if i + 1 < len(args) else ""
+            if nxt and not nxt.startswith("-"):
+                want_host = nxt
+                i += 2
+                continue
+        elif a.startswith("--host="):
+            want_host = a[len("--host=") :]
         else:
             cleaned.append(a)
         i += 1
     args = cleaned
+
+    # Multi-host: the router forwards `--host <name>` to that worker, so by the
+    # time we run, a set --host should equal this host. If it names another host
+    # the router couldn't route it there (unknown / disconnected) — report it
+    # with the available hosts rather than silently creating on the wrong box.
+    from .. import fleet_state
+
+    if want_host is not None and want_host != config.host_name:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: host `{want_host}` isn't available. "
+                f"Available: {', '.join(f'`{h}`' for h in fleet_state.hosts())}."
+            ),
+        )
+        return
 
     if not args:
         await _post_ephemeral(
@@ -821,9 +850,12 @@ def register_join_actions(app) -> None:  # noqa: ANN001
 
 
 async def _handle_list(client, channel_id: str, user_id: str) -> None:  # noqa: ANN001
-    """Implements ``/ccslack list``."""
+    """Implements ``/ccslack list`` (local sessions + remote channels in a fleet)."""
+    from .. import fleet_state
+
     bindings = list(thread_router.channel_bindings.items())
-    if not bindings:
+    remote = fleet_state.remote_channels()
+    if not bindings and not remote:
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
@@ -831,7 +863,12 @@ async def _handle_list(client, channel_id: str, user_id: str) -> None:  # noqa: 
             text="ccslack: no active sessions.",
         )
         return
+
+    fleet = fleet_state.is_fleet()
+    here = f" (`{config.host_name}`)" if fleet else ""
     lines = ["*Active ccslack sessions*"]
+    if bindings:
+        lines.append(f"_local{here}_" if fleet else "")
     for ch_id, window_id in bindings:
         view = session_manager.view_window(window_id)
         display = thread_router.get_display_name(window_id)
@@ -840,11 +877,16 @@ async def _handle_list(client, channel_id: str, user_id: str) -> None:  # noqa: 
         lines.append(
             f"• <#{ch_id}> · `{provider}` · `{window_id}` ({display}) — `{cwd}`"
         )
+    if remote:
+        # Detail (provider/cwd) lives on the owning worker; show channel + host.
+        lines.append("_remote_")
+        for ch_id, host in sorted(remote.items(), key=lambda kv: kv[1]):
+            lines.append(f"• <#{ch_id}> · host `{host}`")
     await _post_ephemeral(
         client.chat_postEphemeral,
         channel=channel_id,
         user=user_id,
-        text="\n".join(lines),
+        text="\n".join(line for line in lines if line),
     )
 
 

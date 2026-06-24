@@ -141,3 +141,32 @@ async def test_worker_link_registry_forward_and_disconnect():
     finally:
         await worker_link.stop()
         await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_worker_link_notifies_connect_and_disconnect():
+    worker_app = _app()
+    worker = RouterLinkSource(worker_app, host="gpu1", port=0)
+    await worker.start()
+
+    notes: list[str] = []
+
+    async def _notify(text: str) -> None:
+        notes.append(text)
+
+    async def _connect():
+        return await asyncio.open_connection("127.0.0.1", worker.port)
+
+    worker_link = WorkerLink("gpu1", _connect, Router("r0"), notify=_notify)
+    await worker_link.start()
+    try:
+        await _settle(lambda: any("connected" in n for n in notes))
+        # Worker goes away → a disconnect note fires.
+        await worker.stop()
+        await _settle(lambda: any("disconnected" in n for n in notes))
+    finally:
+        await worker_link.stop()
+        await worker.stop()
+
+    assert any("connected" in n for n in notes)
+    assert any("disconnected" in n for n in notes)

@@ -3,7 +3,20 @@ from types import SimpleNamespace
 import pytest
 
 from ccslack import router as router_mod
-from ccslack.router import Router, channel_of, route_and_dispatch
+from ccslack.router import Router, channel_of, host_directive, route_and_dispatch
+
+
+# --- host_directive -------------------------------------------------------
+
+
+def test_host_directive_parses_flag():
+    assert host_directive({"command": "/ccslack", "text": "new /p codex --host gpu1"}) == "gpu1"
+    assert host_directive({"command": "/ccslack", "text": "new /p --host=gpu2"}) == "gpu2"
+
+
+def test_host_directive_none_without_flag_or_command():
+    assert host_directive({"command": "/ccslack", "text": "list"}) is None
+    assert host_directive({"event": {"text": "--host x"}}) is None  # not a slash cmd
 
 
 # --- channel_of -----------------------------------------------------------
@@ -68,6 +81,36 @@ def test_set_host_channels_replaces_prior_snapshot():
     assert r.host_for_channel("C3") == "gpu1"
 
 
+def test_connected_hosts_tracking():
+    r = Router(local_host="r0")
+    r.set_host_channels("gpu1", [])  # zero-session worker still counts
+    assert "gpu1" in r.connected_hosts
+    r.drop_host("gpu1")
+    assert "gpu1" not in r.connected_hosts
+
+
+# --- --host routing -------------------------------------------------------
+
+
+def test_host_directive_routes_to_connected_remote():
+    r = Router(local_host="r0")
+    r.set_host_channels("gpu1", [])
+    payload = {"command": "/ccslack", "text": "new /p --host gpu1"}
+    assert r.target_host(payload) == "gpu1"
+
+
+def test_host_directive_local_routes_local():
+    r = Router(local_host="r0")
+    payload = {"command": "/ccslack", "text": "new /p --host r0"}
+    assert r.target_host(payload) is None
+
+
+def test_host_directive_unknown_routes_local():
+    r = Router(local_host="r0")
+    payload = {"command": "/ccslack", "text": "new /p --host ghost"}
+    assert r.target_host(payload) is None  # local; _handle_new will report it
+
+
 # --- route_and_dispatch: ack + local dispatch vs forward ------------------
 
 
@@ -122,6 +165,28 @@ async def test_route_and_dispatch_forwards_remote_without_local_dispatch(monkeyp
     req = SimpleNamespace(envelope_id="e2", payload={"channel": {"id": "C9"}})
     await route_and_dispatch(client, req, app=object(), router=r)
 
-    assert len(client.acks) == 1
+    assert len(client.acks) == 1  # acked after a successful forward
     assert dispatched == []  # NOT dispatched locally
     assert forwarded == [("gpu1", {"channel": {"id": "C9"}})]
+
+
+@pytest.mark.asyncio
+async def test_route_and_dispatch_no_ack_when_forward_fails(monkeypatch):
+    r = Router(local_host="r0")
+    r.bind("gpu1", "C9")
+
+    async def _fake_dispatch(app, req):  # noqa: ANN001
+        raise AssertionError("must not dispatch locally")
+
+    monkeypatch.setattr(router_mod, "run_async_bolt_app", _fake_dispatch)
+
+    async def _fwd(host, payload) -> bool:  # noqa: ANN001
+        return False  # worker link down
+
+    r.set_forwarder(_fwd)
+
+    client = _FakeClient()
+    req = SimpleNamespace(envelope_id="e3", payload={"channel": {"id": "C9"}})
+    await route_and_dispatch(client, req, app=object(), router=r)
+
+    assert client.acks == []  # NOT acked → Slack redelivers

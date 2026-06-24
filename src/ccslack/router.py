@@ -14,8 +14,9 @@ behaves exactly like standalone. Remote tunnels + forwarding arrive in phase 3.
 
 from __future__ import annotations
 
+import re
 import structlog
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
 from slack_bolt.adapter.socket_mode.aiohttp import AsyncSocketModeHandler
@@ -34,6 +35,17 @@ logger = structlog.get_logger()
 
 # Forwards a raw Slack payload to a remote host's worker. Returns True on success.
 Forwarder = Callable[[str, dict[str, Any]], Awaitable[bool]]
+
+# `--host <name>` inside a slash command's text (e.g. `/ccslack new <dir> --host gpu1`).
+_HOST_DIRECTIVE_RE = re.compile(r"(?:^|\s)--host[=\s]+(\S+)")
+
+
+def host_directive(payload: dict[str, Any]) -> str | None:
+    """Extract a ``--host <name>`` selector from a slash command payload, if any."""
+    if not isinstance(payload, dict) or "command" not in payload:
+        return None
+    match = _HOST_DIRECTIVE_RE.search(payload.get("text") or "")
+    return match.group(1) if match else None
 
 
 def channel_of(payload: dict[str, Any]) -> str | None:
@@ -73,15 +85,25 @@ class Router:
     def __init__(self, local_host: str) -> None:
         self.local_host = local_host
         self._channel_host: dict[str, str] = {}
+        self.connected_hosts: set[str] = set()
         self._forwarder: Forwarder | None = None
 
     def set_forwarder(self, forwarder: Forwarder) -> None:
         self._forwarder = forwarder
 
+    def channel_host_items(self) -> Iterator[tuple[str, str]]:
+        """Iterate ``(channel_id, host)`` for every registered channel."""
+        yield from self._channel_host.items()
+
     # --- registry mutations (driven by worker link messages) ---------------
 
     def set_host_channels(self, host: str, channels: list[str]) -> None:
-        """Replace *host*'s entire channel set (a worker's ``hello`` snapshot)."""
+        """Replace *host*'s entire channel set (a worker's ``hello`` snapshot).
+
+        Also marks the host connected — a worker with zero sessions still counts
+        as an available host for ``--host`` routing.
+        """
+        self.connected_hosts.add(host)
         self._channel_host = {
             ch: h for ch, h in self._channel_host.items() if h != host
         }
@@ -90,6 +112,7 @@ class Router:
                 self._channel_host[channel] = host
 
     def bind(self, host: str, channel: str) -> None:
+        self.connected_hosts.add(host)
         if channel:
             self._channel_host[channel] = host
 
@@ -98,7 +121,8 @@ class Router:
             self._channel_host.pop(channel, None)
 
     def drop_host(self, host: str) -> None:
-        """Forget all of a host's channels (on disconnect)."""
+        """Forget all of a host's channels + mark it disconnected."""
+        self.connected_hosts.discard(host)
         self._channel_host = {
             ch: h for ch, h in self._channel_host.items() if h != host
         }
@@ -109,7 +133,18 @@ class Router:
         return self._channel_host.get(channel)
 
     def target_host(self, payload: dict[str, Any]) -> str | None:
-        """The remote host that should handle this event, or None for local."""
+        """The remote host that should handle this event, or None for local.
+
+        A ``--host <name>`` directive on a slash command forwards to that worker
+        when it's a *connected remote* host. An unknown/disconnected/local host
+        falls through to local dispatch — where ``_handle_new`` reports it if
+        the host isn't this one.
+        """
+        directive = host_directive(payload)
+        if directive is not None:
+            if directive != self.local_host and directive in self.connected_hosts:
+                return directive
+            return None
         channel = channel_of(payload)
         if not channel:
             return None
@@ -118,12 +153,15 @@ class Router:
             return None
         return host
 
-    async def forward(self, host: str, payload: dict[str, Any]) -> None:
+    async def forward(self, host: str, payload: dict[str, Any]) -> bool:
+        """Forward a payload to *host*'s worker. Returns True on success."""
         if self._forwarder is None:
             logger.warning("router: no forwarder; dropping event for host %s", host)
-            return
-        if not await self._forwarder(host, payload):
+            return False
+        ok = await self._forwarder(host, payload)
+        if not ok:
             logger.warning("router: forward to host %s failed", host)
+        return ok
 
 
 async def route_and_dispatch(
@@ -132,21 +170,27 @@ async def route_and_dispatch(
     app: AsyncApp,
     router: Router,
 ) -> None:
-    """Ack the Socket Mode request, then dispatch locally or forward to a host.
+    """Dispatch a Socket Mode request locally, or forward it to the owning host.
 
-    Ack first: Socket Mode requires a response within ~3s, and ccslack replies
-    via ephemeral/channel posts rather than the synchronous slash response, so
-    an empty ack loses nothing. A local target dispatches into the Bolt app
-    (response ignored — already acked); a remote target is forwarded.
+    * **Local** target: ack immediately (ccslack replies via ephemeral/channel
+      posts, not the synchronous slash response, so an empty ack loses nothing),
+      then dispatch into the local Bolt app (listeners run backgrounded).
+    * **Remote** target: forward *first*, ack only on success. If the worker
+      link is momentarily down the forward fails and we do NOT ack, so Slack
+      redelivers (to this same router connection) a few times — covering a brief
+      worker blip instead of dropping the event.
     """
-    await client.send_socket_mode_response(
-        SocketModeResponse(envelope_id=req.envelope_id)
-    )
     host = router.target_host(req.payload)
     if host is None:
+        await client.send_socket_mode_response(
+            SocketModeResponse(envelope_id=req.envelope_id)
+        )
         await run_async_bolt_app(app, req)
         return
-    await router.forward(host, req.payload)
+    if await router.forward(host, req.payload):
+        await client.send_socket_mode_response(
+            SocketModeResponse(envelope_id=req.envelope_id)
+        )
 
 
 class _RoutingHandler(AsyncSocketModeHandler):

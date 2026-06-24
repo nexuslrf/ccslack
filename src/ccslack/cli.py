@@ -66,17 +66,29 @@ def router(host_name: str | None) -> None:
     while also running sessions locally (double role). With no workers connected
     this behaves exactly like a standalone `ccslack run`.
     """
+    from . import fleet_state
     from .bot import create_app, start_event_source, stop_event_source
     from .config import config
     from .router import Router, RouterSource
     from .router_link import RouterFleet, parse_workers
+    from .slack_client import BoltSlackClient
+    from .slack_sender import safe_post
 
     async def _main() -> None:
         app = create_app()
         router_obj = Router(local_host=host_name or config.host_name)
+        fleet_state.install_router(router_obj)
         await start_event_source(app, RouterSource(app, router_obj))
+
+        meta_client = BoltSlackClient(app.client)
+
+        async def _notify(text: str) -> None:
+            await safe_post(meta_client, channel=config.meta_channel_id, text=text)
+
         fleet = RouterFleet(
-            router_obj, parse_workers(config.workers_raw, config.link_port)
+            router_obj,
+            parse_workers(config.workers_raw, config.link_port),
+            notify=_notify,
         )
         await fleet.start()
         try:
