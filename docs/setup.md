@@ -103,6 +103,10 @@ everything at once.
 - **Usage hint**: `new <dir> [provider]`
 - **Request URL**: leave blank — Socket Mode delivers the command over
   the websocket, so no public endpoint is needed.
+- **Escape channels, users, and links**: **checked** ✅ — so `@user` /
+  `#channel` arrive as `<@U…>` / `<#C…>`. Required for `/ccslack adduser`,
+  `removeuser`, and `kill <#channel>`; without it those see plain text and
+  reply "couldn't read a user". (Paste a member ID as a fallback.)
 
 ### 3e. Install to workspace
 

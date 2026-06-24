@@ -41,7 +41,10 @@ features:
     - command: /ccslack
       description: Manage ccslack sessions
       usage_hint: "new <dir> [provider] | list | sessions | history | resume | panes | send | mute | toolcalls | kill | help"
-      should_escape: false
+      # Escape user/channel mentions so `@user` / `#channel` arrive as
+      # `<@U…>` / `<#C…>` — required by /ccslack adduser, removeuser, and
+      # kill <#channel>. Plain paths/text are unaffected.
+      should_escape: true
 
 oauth_config:
   scopes:

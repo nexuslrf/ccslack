@@ -1330,11 +1330,20 @@ async def _handle_grant(
 
     targets = _parse_user_ids(args)
     if not targets:
+        # A typed @mention only arrives as a usable id when the slash command
+        # has "Escape channels, users, and links" enabled; otherwise it's plain
+        # text. Pasting the member ID always works.
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
             user=user_id,
-            text=f"ccslack: usage `{config.slash_command} {verb} @user [@user …]`.",
+            text=(
+                f"ccslack: usage `{config.slash_command} {verb} @user [@user …]` "
+                "— couldn't read a user. If `@name` isn't working, paste the "
+                "member ID (profile → ⋯ → Copy member ID), e.g. "
+                f"`{config.slash_command} {verb} U0123ABC`, or enable "
+                "mention-escaping on the slash command."
+            ),
         )
         return
 
