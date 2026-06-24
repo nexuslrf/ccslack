@@ -89,11 +89,11 @@ class Config:
         if not self.slack_bot_token:
             raise ValueError("SLACK_BOT_TOKEN environment variable is required")
 
+        # Required for Socket Mode (standalone / router roles), NOT for a
+        # --worker, which receives events forwarded from the router instead.
+        # The presence check is deferred to SocketModeSource.start() so a worker
+        # can run without it.
         self.slack_app_token: str = os.getenv("SLACK_APP_TOKEN") or ""
-        if not self.slack_app_token:
-            raise ValueError(
-                "SLACK_APP_TOKEN environment variable is required (Socket Mode)"
-            )
 
         self.meta_channel_id: str = os.getenv("SLACK_META_CHANNEL_ID") or ""
         if not self.meta_channel_id:
@@ -204,6 +204,7 @@ class Config:
         self._init_send()
         self._init_lifecycle()
         self._init_feature_flags()
+        self._init_link()
 
         # Status display: green=active (system POV) or green=ready (user POV).
         raw_status_mode = os.getenv("CCSLACK_STATUS_MODE", "").strip().lower()
@@ -219,6 +220,39 @@ class Config:
             len(self.allowed_users),
             self.tmux_session_name,
             self.meta_channel_id,
+        )
+
+    def _init_link(self) -> None:
+        # Multi-host router/worker link. Identifies this host and the localhost
+        # port the worker's link server listens on (reached by the router over
+        # an SSH tunnel). Irrelevant to standalone deployments.
+        import socket
+
+        self.host_name: str = os.getenv("CCSLACK_HOST") or socket.gethostname()
+        self.link_port: int = _parse_int_env("CCSLACK_LINK_PORT", 8765)
+        # Router-only: comma-separated `host=ssh_target` workers to tunnel to.
+        # Empty = single-host router (behaves like standalone). Parsed by
+        # router_link.parse_workers.
+        self.workers_raw: str = os.getenv("CCSLACK_WORKERS", "")
+        # Post host connect/disconnect lines to the meta channel. Default off —
+        # check status on demand with `/ccslack fleet` instead.
+        self.fleet_notify: bool = os.getenv("CCSLACK_FLEET_NOTIFY", "false").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        # Run SSH tunnels under a PTY and bridge interactive auth prompts (e.g.
+        # Duo 2FA) to the meta channel for a Slack-side response. Default off —
+        # the tunnel inherits the console for manual auth as usual.
+        self.ssh_interactive: bool = os.getenv(
+            "CCSLACK_SSH_INTERACTIVE", "false"
+        ).lower() in ("1", "true", "yes")
+        # Regex (search, multiline) marking the tail of an SSH auth prompt that's
+        # waiting for input. Tune to your server's prompt. Default matches common
+        # Duo / password / verification prompts ending in a colon.
+        self.ssh_prompt_re: str = os.getenv(
+            "CCSLACK_SSH_PROMPT_RE",
+            r"(?i)(passcode|password|verification code|two-factor|duo|option).*:\s*$",
         )
 
     def _init_feature_flags(self) -> None:

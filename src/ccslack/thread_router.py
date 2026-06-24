@@ -62,12 +62,33 @@ class ThreadRouter:
         self.channel_grants: dict[str, set[str]] = {}
         self._schedule_save: Callable[[], None] = schedule_save
         self._has_window_state: Callable[[str], bool] = has_window_state
+        # Observers notified on bind/unbind ((action, channel_id)). Used by a
+        # worker to push live ownership changes to the router. Core never knows
+        # about the link — it just fires listeners.
+        self._binding_listeners: list[Callable[[str, str], None]] = []
+
+    def add_binding_listener(self, listener: Callable[[str, str], None]) -> None:
+        """Register a callback fired as ``listener("bind"|"unbind", channel_id)``."""
+        self._binding_listeners.append(listener)
+
+    def remove_binding_listener(self, listener: Callable[[str, str], None]) -> None:
+        """Unregister a previously added binding listener (no-op if absent)."""
+        if listener in self._binding_listeners:
+            self._binding_listeners.remove(listener)
+
+    def _notify_binding(self, action: str, channel_id: str) -> None:
+        for listener in self._binding_listeners:
+            try:
+                listener(action, channel_id)
+            except Exception:  # noqa: BLE001 — a bad listener must not break routing
+                logger.exception("binding listener failed (%s %s)", action, channel_id)
 
     def reset(self) -> None:
         """Clear all state. Used for test isolation."""
         self.channel_bindings.clear()
         self.window_display_names.clear()
         self._window_to_channel.clear()
+        self._binding_listeners.clear()
         self.chat_threads.clear()
         self.channel_grants.clear()
 
@@ -198,6 +219,7 @@ class ThreadRouter:
         if window_name:
             self.window_display_names[window_id] = window_name
         self._schedule_save()
+        self._notify_binding("bind", channel_id)
         display = window_name or self.get_display_name(window_id)
         logger.info(
             "Bound channel %s -> window_id %s (%s)",
@@ -228,6 +250,9 @@ class ThreadRouter:
         # where the channel — and its chat threads — must survive. Genuine
         # teardown (kill / archive / prune) calls clear_chat_threads() instead.
         self._schedule_save()
+        # A rebind fires unbind+bind (router drops then re-adds — same owner);
+        # a teardown fires only unbind (router drops it). Both are correct.
+        self._notify_binding("unbind", channel_id)
         return window_id
 
     def get_window_for_channel(self, channel_id: str) -> str | None:

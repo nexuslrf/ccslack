@@ -319,6 +319,10 @@ def register(app: AsyncApp) -> None:
             await _handle_sessions(client, channel_id, user_id)
             return
 
+        if sub == "fleet":
+            await _handle_fleet(client, channel_id, user_id)
+            return
+
         if sub == "history":
             # Lazy: history pulls transcript reader.
             from .history import handle_history
@@ -381,14 +385,17 @@ def _help_text() -> str:
     slash = config.slash_command
     return (
         "*ccslack commands*\n"
-        f"• `{slash} new <directory> [provider] [--worktree [branch]] [--yolo]` "
-        "— start a new session.\n"
+        f"• `{slash} new <directory> [provider] [--worktree [branch]] [--yolo] "
+        "[--host <name>]` — start a new session.\n"
         "    provider ∈ {claude, codex, gemini, pi, shell}; default: "
         f"`{config.provider_name}`.\n"
         "    `--yolo` launches claude/codex/gemini with approvals skipped "
         "(dangerous).\n"
+        "    `--host <name>` runs the session on a specific fleet host "
+        "(multi-host router).\n"
         f"• `{slash} list` — quick list of active sessions.\n"
         f"• `{slash} sessions` — interactive dashboard with per-session kill.\n"
+        f"• `{slash} fleet` — multi-host: per-host connection + session status.\n"
         f"• `{slash} history [N]` — last N transcript messages in this channel.\n"
         f"• `{slash} resume` — pick a past Claude session in this channel's cwd.\n"
         f"• `{slash} restore [continue|resume|fresh]` — respawn a dead session "
@@ -442,10 +449,11 @@ async def _handle_new(
         )
         return
 
-    # Parse optional --worktree [branch-name] and --yolo flags out of args.
+    # Parse optional --worktree [branch-name], --yolo, and --host <name> flags.
     want_worktree = False
     want_yolo = False
     worktree_branch: str | None = None
+    want_host: str | None = None
     cleaned: list[str] = []
     i = 0
     while i < len(args):
@@ -459,10 +467,36 @@ async def _handle_new(
                 continue
         elif a in ("--yolo", "--dangerous"):
             want_yolo = True
+        elif a == "--host":
+            nxt = args[i + 1] if i + 1 < len(args) else ""
+            if nxt and not nxt.startswith("-"):
+                want_host = nxt
+                i += 2
+                continue
+        elif a.startswith("--host="):
+            want_host = a[len("--host=") :]
         else:
             cleaned.append(a)
         i += 1
     args = cleaned
+
+    # Multi-host: the router forwards `--host <name>` to that worker, so by the
+    # time we run, a set --host should equal this host. If it names another host
+    # the router couldn't route it there (unknown / disconnected) — report it
+    # with the available hosts rather than silently creating on the wrong box.
+    from .. import fleet_state
+
+    if want_host is not None and want_host != config.host_name:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: host `{want_host}` isn't available. "
+                f"Available: {', '.join(f'`{h}`' for h in fleet_state.hosts())}."
+            ),
+        )
+        return
 
     if not args:
         await _post_ephemeral(
@@ -821,9 +855,12 @@ def register_join_actions(app) -> None:  # noqa: ANN001
 
 
 async def _handle_list(client, channel_id: str, user_id: str) -> None:  # noqa: ANN001
-    """Implements ``/ccslack list``."""
+    """Implements ``/ccslack list`` (local sessions + remote channels in a fleet)."""
+    from .. import fleet_state
+
     bindings = list(thread_router.channel_bindings.items())
-    if not bindings:
+    remote = fleet_state.remote_channels()
+    if not bindings and not remote:
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
@@ -831,7 +868,12 @@ async def _handle_list(client, channel_id: str, user_id: str) -> None:  # noqa: 
             text="ccslack: no active sessions.",
         )
         return
+
+    fleet = fleet_state.is_fleet()
+    here = f" (`{config.host_name}`)" if fleet else ""
     lines = ["*Active ccslack sessions*"]
+    if bindings:
+        lines.append(f"_local{here}_" if fleet else "")
     for ch_id, window_id in bindings:
         view = session_manager.view_window(window_id)
         display = thread_router.get_display_name(window_id)
@@ -840,6 +882,45 @@ async def _handle_list(client, channel_id: str, user_id: str) -> None:  # noqa: 
         lines.append(
             f"• <#{ch_id}> · `{provider}` · `{window_id}` ({display}) — `{cwd}`"
         )
+    if remote:
+        # Detail (provider/cwd) lives on the owning worker; show channel + host.
+        lines.append("_remote_")
+        for ch_id, host in sorted(remote.items(), key=lambda kv: kv[1]):
+            lines.append(f"• <#{ch_id}> · host `{host}`")
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text="\n".join(line for line in lines if line),
+    )
+
+
+async def _handle_fleet(client, channel_id: str, user_id: str) -> None:  # noqa: ANN001
+    """Implements ``/ccslack fleet`` — per-host status in a multi-host router."""
+    from .. import fleet_state
+
+    rows = fleet_state.fleet_status()
+    if not rows:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                "ccslack: not a multi-host router (no workers configured). "
+                "See `docs/multi-host.md`."
+            ),
+        )
+        return
+
+    lines = ["*Fleet status*"]
+    for row in rows:
+        dot = ":large_green_circle:" if row["connected"] else ":red_circle:"
+        sessions = row["sessions"]
+        sess = f"{sessions} session{'s' if sessions != 1 else ''}"
+        role = "router" if row["role"] == "router" else "worker"
+        ssh = f" · `{row['ssh']}`" if row["ssh"] else ""
+        state = "" if row["connected"] else " · *disconnected*"
+        lines.append(f"{dot} `{row['host']}` ({role}) — {sess}{ssh}{state}")
     await _post_ephemeral(
         client.chat_postEphemeral,
         channel=channel_id,
@@ -1778,6 +1859,9 @@ async def _handle_thread(
     )
 
 
+# Dashboard kill value parts: "channel|window" local, "+|host" when remote.
+_KILL_VALUE_WITH_HOST = 3
+
 _STATUS_EMOJI = {
     "active": ":large_green_circle:",
     "idle": ":large_yellow_circle:",
@@ -1786,10 +1870,73 @@ _STATUS_EMOJI = {
 }
 
 
+def collect_session_rows() -> list[dict[str, str]]:
+    """Describe this host's bound sessions (used by the dashboard + worker RPC)."""
+    rows: list[dict[str, str]] = []
+    for ch_id, window_id in thread_router.channel_bindings.items():
+        view = session_manager.view_window(window_id)
+        ws = window_store.window_states.get(window_id)
+        rows.append(
+            {
+                "channel": ch_id,
+                "window": window_id,
+                "provider": (view.provider_name if view else "") or "?",
+                "cwd": (view.cwd if view else "") or "?",
+                "display": thread_router.get_display_name(window_id) or "",
+                "state": (ws.status_state if ws else "idle") or "idle",
+            }
+        )
+    return rows
+
+
+def _session_block(row: dict[str, Any], *, host: str = "") -> dict[str, Any]:
+    """One dashboard row (section + Kill button). ``host`` tags a remote row."""
+    emoji = _STATUS_EMOJI.get(row["state"], ":grey_question:")
+    ch_id, window_id = row["channel"], row["window"]
+    host_tag = f" · `{host}`" if host else ""
+    # Kill value: channel|window for local; channel|window|host for remote so the
+    # dashboard Kill button can forward to the owning worker.
+    kill_value = f"{ch_id}|{window_id}" + (f"|{host}" if host else "")
+    return {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": (
+                f"{emoji} <#{ch_id}> · `{row['provider']}` · `{window_id}` "
+                f"({row['display']}){host_tag}\n`{row['cwd']}`"
+            ),
+        },
+        "accessory": {
+            "type": "button",
+            "action_id": "ccslack_dashboard_kill",
+            "style": "danger",
+            "text": {"type": "plain_text", "text": ":wastebasket: Kill"},
+            "value": kill_value,
+            "confirm": {
+                "title": {"type": "plain_text", "text": "Kill session?"},
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"Kills tmux `{window_id}` and archives <#{ch_id}>.",
+                },
+                "confirm": {"type": "plain_text", "text": "Kill"},
+                "deny": {"type": "plain_text", "text": "Cancel"},
+            },
+        },
+    }
+
+
 async def _handle_sessions(client, channel_id: str, user_id: str) -> None:  # noqa: ANN001
-    """``/ccslack sessions`` — Block Kit dashboard with per-row Kill button."""
-    bindings = list(thread_router.channel_bindings.items())
-    if not bindings:
+    """``/ccslack sessions`` — Block Kit dashboard with per-row Kill button.
+
+    In a multi-host fleet this merges the router's own sessions with each
+    connected worker's (gathered over the link), tagging remote rows by host.
+    """
+    from .. import fleet_state
+
+    local_rows = collect_session_rows()
+    remote_rows = await fleet_state.remote_sessions()
+    total = len(local_rows) + len(remote_rows)
+    if total == 0:
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
@@ -1801,55 +1948,20 @@ async def _handle_sessions(client, channel_id: str, user_id: str) -> None:  # no
     blocks: list[dict[str, Any]] = [
         {
             "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*Active ccslack sessions* ({len(bindings)})",
-            },
+            "text": {"type": "mrkdwn", "text": f"*Active ccslack sessions* ({total})"},
         },
         {"type": "divider"},
     ]
-    for ch_id, window_id in bindings:
-        view = session_manager.view_window(window_id)
-        ws = window_store.window_states.get(window_id)
-        provider = (view.provider_name if view else "") or "?"
-        cwd = (view.cwd if view else "") or "?"
-        state = (ws.status_state if ws else "idle") or "idle"
-        emoji = _STATUS_EMOJI.get(state, ":grey_question:")
-        display = thread_router.get_display_name(window_id)
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        f"{emoji} <#{ch_id}> · `{provider}` · `{window_id}` "
-                        f"({display})\n`{cwd}`"
-                    ),
-                },
-                "accessory": {
-                    "type": "button",
-                    "action_id": "ccslack_dashboard_kill",
-                    "style": "danger",
-                    "text": {"type": "plain_text", "text": ":wastebasket: Kill"},
-                    "value": f"{ch_id}|{window_id}",
-                    "confirm": {
-                        "title": {"type": "plain_text", "text": "Kill session?"},
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"Kills tmux `{window_id}` and archives <#{ch_id}>.",
-                        },
-                        "confirm": {"type": "plain_text", "text": "Kill"},
-                        "deny": {"type": "plain_text", "text": "Cancel"},
-                    },
-                },
-            }
-        )
+    blocks.extend(_session_block(row) for row in local_rows)
+    blocks.extend(
+        _session_block(row, host=str(row.get("host", ""))) for row in remote_rows
+    )
 
     await _post_ephemeral(
         client.chat_postEphemeral,
         channel=channel_id,
         user=user_id,
-        text=f"Active ccslack sessions: {len(bindings)}",
+        text=f"Active ccslack sessions: {total}",
         blocks=blocks,
     )
 
@@ -2119,10 +2231,33 @@ def register_dashboard_actions(app) -> None:  # noqa: ANN001
                 break
         if "|" not in target:
             return
-        target_channel, target_window = target.split("|", 1)
-        result = await _kill_one(client, target_channel, target_window)
-        # Reply ephemerally in the channel where the dashboard was posted.
+        # value: "channel|window" (local) or "channel|window|host" (remote).
+        parts = target.split("|")
+        target_channel, target_window = parts[0], parts[1]
+        host = parts[2] if len(parts) >= _KILL_VALUE_WITH_HOST else ""
         dash_channel = body.get("channel", {}).get("id", "")
+
+        from .. import fleet_state
+
+        if host and host != config.host_name and fleet_state.is_fleet():
+            # Remote session: forward a `kill <#channel>` to the owning worker.
+            payload = {
+                "command": config.slash_command,
+                "text": f"kill <#{target_channel}>",
+                "channel_id": config.meta_channel_id,
+                "user_id": user_id,
+                "trigger_id": "",
+                "response_url": "",
+            }
+            ok = await fleet_state.forward(host, payload)
+            result = (
+                f":wastebasket: kill sent to host `{host}` for <#{target_channel}>."
+                if ok
+                else f"ccslack: couldn't reach host `{host}` to kill the session."
+            )
+        else:
+            result = await _kill_one(client, target_channel, target_window)
+        # Reply ephemerally in the channel where the dashboard was posted.
         if dash_channel:
             await _post_ephemeral(
                 client.chat_postEphemeral,

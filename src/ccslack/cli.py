@@ -58,6 +58,100 @@ def run() -> None:
 
 
 @cli.command()
+@click.option("--host", "host_name", default=None, help="This router host's name (default CCSLACK_HOST/hostname).")
+def router(host_name: str | None) -> None:
+    """Run as the multi-host router: the single Socket Mode intake + dispatcher.
+
+    Holds the Slack connection and routes each event to the owning host's worker,
+    while also running sessions locally (double role). With no workers connected
+    this behaves exactly like a standalone `ccslack run`.
+    """
+    from . import fleet_state
+    from .bot import create_app, start_event_source, stop_event_source
+    from .config import config
+    from .router import Router, RouterSource
+    from .router_link import RouterFleet, parse_workers
+    from .slack_client import BoltSlackClient
+    from .slack_sender import safe_post
+
+    async def _main() -> None:
+        app = create_app()
+        router_obj = Router(local_host=host_name or config.host_name)
+        specs = parse_workers(config.workers_raw, config.link_port)
+        fleet_state.install_router(router_obj)
+        fleet_state.set_workers([(s.host, s.ssh_target) for s in specs])
+        await start_event_source(app, RouterSource(app, router_obj))
+
+        meta_client = BoltSlackClient(app.client)
+
+        notify = None
+        if config.fleet_notify:
+
+            async def _notify(text: str) -> None:
+                await safe_post(meta_client, channel=config.meta_channel_id, text=text)
+
+            notify = _notify
+
+        on_prompt = None
+        if config.ssh_interactive:
+            from .handlers.ssh_prompt import post_prompt
+
+            async def _on_prompt(host: str, text: str, options: list) -> None:
+                await post_prompt(meta_client, host, text, options)
+
+            on_prompt = _on_prompt
+
+        fleet = RouterFleet(router_obj, specs, notify=notify, on_prompt=on_prompt)
+        fleet_state.set_session_gatherer(fleet.gather_sessions)
+        await fleet.start()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await fleet.stop()
+            await stop_event_source()
+
+    try:
+        asyncio.run(_main())
+    except KeyboardInterrupt:
+        click.echo("\nShutdown requested.")
+        sys.exit(0)
+
+
+@cli.command()
+@click.option("--port", type=int, default=None, help="Localhost link port (default CCSLACK_LINK_PORT/8765).")
+@click.option("--host", "host_name", default=None, help="Host name reported to the router (default CCSLACK_HOST/hostname).")
+def worker(port: int | None, host_name: str | None) -> None:
+    """Run as a multi-host worker: drive local tmux, receive events from a router.
+
+    No Slack Socket Mode connection — the router (a separate `ccslack` on the
+    app token) forwards events here over an SSH tunnel; this process posts to
+    Slack directly with the bot token.
+    """
+    from .bot import create_app, start_event_source, stop_event_source
+    from .config import config
+    from .event_source import RouterLinkSource
+
+    async def _main() -> None:
+        app = create_app()
+        source = RouterLinkSource(
+            app,
+            host=host_name or config.host_name,
+            port=port if port is not None else config.link_port,
+        )
+        await start_event_source(app, source)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await stop_event_source()
+
+    try:
+        asyncio.run(_main())
+    except KeyboardInterrupt:
+        click.echo("\nShutdown requested.")
+        sys.exit(0)
+
+
+@cli.command()
 @click.option("--install", "action", flag_value="install")
 @click.option("--uninstall", "action", flag_value="uninstall")
 @click.option("--status", "action", flag_value="status")

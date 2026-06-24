@@ -25,6 +25,14 @@ Create a new session.
 | `/ccslack new <dir> claude --worktree` | Spawns a fresh `git worktree` (auto-named `ccg/<slug>`) and uses *that* path as the session cwd |
 | `/ccslack new <dir> claude --worktree feature-x` | Same but with a named branch |
 | `/ccslack new <dir> codex --yolo` | Launches the agent with approvals/sandbox **skipped** — see YOLO below |
+| `/ccslack new <dir> --host gpu1` | Runs the session on a specific fleet host (multi-host router) — see below |
+
+#### `--host` (multi-host)
+
+In a [multi-host fleet](multi-host.md), `--host <name>` runs the session on a
+specific worker; omit it to use the router's own host. A name that isn't a
+connected host is rejected with the available host list. No-op (single host)
+without a router. The no-arg modal form always targets the router host.
 
 #### YOLO (permissive launch)
 
@@ -62,7 +70,18 @@ What happens on success:
 
 ### `/ccslack list`
 
-Quick one-line-per-session text dump of every bound channel.
+Quick one-line-per-session text dump of every bound channel. In a
+[multi-host fleet](multi-host.md) it adds a *remote* section: each channel owned
+by another host, with that host's name.
+
+- **Where**: meta channel only.
+- **Auth**: `ALLOWED_USERS`.
+
+### `/ccslack fleet`
+
+Multi-host only: per-host status — each configured host with a connected/
+disconnected dot, session count, and ssh target. See
+[multi-host.md](multi-host.md).
 
 - **Where**: meta channel only.
 - **Auth**: `ALLOWED_USERS`.
@@ -71,7 +90,8 @@ Quick one-line-per-session text dump of every bound channel.
 
 Interactive Block Kit dashboard. Each row: state emoji, channel mention,
 provider, tmux window ID, display name, cwd, **🗑️ Kill button** with
-confirm modal.
+confirm modal. In a [multi-host fleet](multi-host.md) it merges every host's
+sessions (each remote row tagged by host), and the Kill button works cross-host.
 
 - **Where**: meta channel only.
 - **Auth**: `ALLOWED_USERS`.

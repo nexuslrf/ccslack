@@ -2,11 +2,13 @@
 
 Builds the ``AsyncApp`` with the bot token, registers handlers from
 ``handlers.registry``, and exposes a ``create_app`` factory plus ``start`` /
-``stop`` coroutines that drive Socket Mode.
+``stop`` coroutines that drive an inbound :class:`~ccslack.event_source.EventSource`.
 
 Responsibilities kept here:
   - ``create_app`` — Bolt ``AsyncApp`` factory.
-  - ``start_socket_mode`` / ``stop_socket_mode`` — Socket Mode lifecycle.
+  - ``start_event_source`` / ``stop_event_source`` — bootstrap + source lifecycle.
+  - ``start_socket_mode`` / ``stop_socket_mode`` — back-compat aliases that use
+    the default :class:`SocketModeSource` (the standalone path).
   - Global error handler.
 
 Actual handler bodies live under ``handlers/`` and are registered by
@@ -17,10 +19,10 @@ from __future__ import annotations
 
 import structlog
 from slack_bolt.async_app import AsyncApp
-from slack_bolt.adapter.socket_mode.aiohttp import AsyncSocketModeHandler
 
 from . import bootstrap
 from .config import config
+from .event_source import EventSource, SocketModeSource
 from .handlers.registry import register_all
 
 logger = structlog.get_logger()
@@ -56,38 +58,47 @@ def create_app() -> AsyncApp:
     return app
 
 
-_socket_handler: AsyncSocketModeHandler | None = None
+_event_source: EventSource | None = None
 
 
-async def start_socket_mode(app: AsyncApp) -> AsyncSocketModeHandler:
-    """Connect to Slack via Socket Mode and start handling events.
+async def start_event_source(app: AsyncApp, source: EventSource) -> EventSource:
+    """Run post-init bootstrap, then start the given inbound event source.
 
     Runs ``bootstrap.bootstrap_application`` for post-init wiring (session
-    monitor, status polling) before opening the socket.
+    monitor, status polling) before the source begins delivering events. The
+    standalone path passes a :class:`SocketModeSource`; a worker passes a
+    forwarding source.
     """
-    global _socket_handler
+    global _event_source
     await bootstrap.bootstrap_application(app)
-    handler = AsyncSocketModeHandler(app, config.slack_app_token)
-    _socket_handler = handler
-    await handler.connect_async()
-    logger.info("Socket Mode connected; ccslack ready")
-    return handler
+    _event_source = source
+    await source.start()
+    return source
+
+
+async def stop_event_source() -> None:
+    """Stop the active event source and tear down runtime state."""
+    global _event_source
+    if _event_source is not None:
+        await _event_source.stop()
+        _event_source = None
+    await bootstrap.shutdown_runtime()
+
+
+async def start_socket_mode(app: AsyncApp) -> EventSource:
+    """Standalone entry point: bootstrap + a live Socket Mode connection."""
+    return await start_event_source(app, SocketModeSource(app))
 
 
 async def stop_socket_mode() -> None:
-    """Disconnect Socket Mode and tear down runtime state."""
-    global _socket_handler
-    if _socket_handler is not None:
-        try:
-            await _socket_handler.close_async()
-        except Exception:  # noqa: BLE001 — best-effort shutdown
-            logger.exception("Error closing Socket Mode handler")
-        _socket_handler = None
-    await bootstrap.shutdown_runtime()
+    """Disconnect the event source and tear down runtime state."""
+    await stop_event_source()
 
 
 __all__ = [
     "create_app",
+    "start_event_source",
     "start_socket_mode",
+    "stop_event_source",
     "stop_socket_mode",
 ]

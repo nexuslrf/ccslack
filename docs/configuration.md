@@ -30,6 +30,23 @@ override env vars where applicable.
 | `CCSLACK_JOIN_OFFER` | `true` | After `/ccslack new` creates a session, post a notice in the meta channel with a **Join** button so the other `ALLOWED_USERS` can opt into the new private channel. Set `false` to skip it. |
 | `CCSLACK_PUBLIC_CHANNELS` | `false` | **Office mode.** Create **public** session channels and stop trusting channel membership for auth — instead require `ALLOWED_USERS` + per-channel `/ccslack adduser` grants. For workspaces that forbid private channels (`groups:write`). Needs `channels:manage`/`channels:history`/`channels:read` + the `message.channels` event. ⚠️ Agent output, `/send` files, and screenshots become visible to the whole workspace. See [commands](commands.md#public-office-mode). |
 
+### Multi-host (router + workers)
+
+Opt-in. With `CCSLACK_WORKERS` empty, `ccslack router` == standalone. Full
+guide: [multi-host.md](multi-host.md).
+
+| Variable | Default | Role | Description |
+|---|---|---|---|
+| `CCSLACK_HOST` | hostname | all | This machine's name in the fleet (shown in `/ccslack list`, targeted by `new --host`). |
+| `CCSLACK_LINK_PORT` | `8765` | worker | Localhost port the worker's link server listens on (the router reaches it over an SSH tunnel — never exposed on the network). |
+| `CCSLACK_WORKERS` | empty | router | Comma-separated `host=ssh_target` entries, e.g. `gpu1=user@gpu1,gpu2=gpu2-alias`. Empty = single-host router (standalone behaviour). |
+| `CCSLACK_FLEET_NOTIFY` | `false` | router | Post host connect/disconnect lines to the meta channel. Off by default — use `/ccslack fleet` to check status on demand. |
+| `CCSLACK_SSH_INTERACTIVE` | `false` | router | Run SSH tunnels under a PTY and bridge interactive auth prompts (e.g. Duo 2FA) to the meta channel for a Slack-side response (option buttons + a passcode modal), instead of the console. |
+| `CCSLACK_SSH_PROMPT_RE` | *(Duo/password/2FA)* | router | Regex (searched against the prompt tail) marking "ssh is waiting for input". Tune to your server's prompt wording. |
+
+`SLACK_APP_TOKEN` is **router-only** in a fleet — a worker receives forwarded
+events instead of opening Socket Mode, so it runs without it.
+
 ### Storage + tmux
 
 | Variable | Default | Description |
@@ -223,6 +240,9 @@ These survive bot restarts.
 The CLI defers to env vars for most things; the few flags ccslack accepts:
 
 ```
+ccslack                         # standalone bot (default)
+ccslack router [--host <name>]  # multi-host router (see multi-host.md)
+ccslack worker [--port N --host <name>]   # multi-host worker
 ccslack --config-dir <path>     # equivalent to CCSLACK_DIR
 ccslack --version, -v
 ccslack --help

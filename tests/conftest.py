@@ -57,6 +57,7 @@ def _isolate_singleton_state() -> Iterator[None]:
     # otherwise accessing them below raises "not yet wired" for tests that only
     # imported ``config``.
     import ccslack.session  # noqa: F401  (import for side effect: wires proxies)
+    from ccslack import fleet_state, ssh_auth
     from ccslack.thread_router import thread_router
     from ccslack.user_preferences import user_preferences
     from ccslack.window_state_store import window_store
@@ -68,6 +69,8 @@ def _isolate_singleton_state() -> Iterator[None]:
         thread_router._window_to_channel.clear()
         user_preferences.user_window_offsets.clear()
         user_preferences.user_dir_favorites.clear()
+        fleet_state.reset()
+        ssh_auth.reset_for_testing()
 
     _clear()
     yield
