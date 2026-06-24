@@ -66,6 +66,13 @@ def remote_channels() -> dict[str, str]:
     }
 
 
+async def forward(host: str, payload: dict[str, object]) -> bool:
+    """Forward a raw Slack payload to *host*'s worker. False if not a router."""
+    if _router is None:
+        return False
+    return await _router.forward(host, payload)
+
+
 def fleet_status() -> list[dict[str, object]]:
     """Per-host status rows for ``/ccslack fleet`` (empty when not a router).
 
@@ -105,6 +112,7 @@ def fleet_status() -> list[dict[str, object]]:
 
 __all__ = [
     "fleet_status",
+    "forward",
     "hosts",
     "install_router",
     "is_fleet",

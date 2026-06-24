@@ -40,13 +40,44 @@ def _provider_option(name: str) -> dict[str, Any]:
     return {"text": {"type": "plain_text", "text": name}, "value": name}
 
 
+def _host_block(hosts: list[str], default_host: str) -> dict[str, Any]:
+    """A static_select for the target fleet host (multi-host only)."""
+    options = [
+        {"text": {"type": "plain_text", "text": h}, "value": h} for h in hosts
+    ]
+    initial = next((o for o in options if o["value"] == default_host), options[0])
+    return {
+        "type": "input",
+        "block_id": "host_block",
+        "label": {"type": "plain_text", "text": "Host"},
+        "element": {
+            "type": "static_select",
+            "action_id": "host",
+            "initial_option": initial,
+            "options": options,
+        },
+    }
+
+
 def build_new_session_view(
-    *, default_provider: str, private_metadata: str
+    *,
+    default_provider: str,
+    private_metadata: str,
+    hosts: list[str] | None = None,
+    default_host: str = "",
 ) -> dict[str, Any]:
-    """Build the Block Kit modal view for ``/ccslack new``."""
+    """Build the Block Kit modal view for ``/ccslack new``.
+
+    When ``hosts`` has more than one entry (a multi-host fleet), a Host selector
+    is added so the session can be launched on a chosen worker without typing
+    ``--host``.
+    """
     if default_provider not in _PROVIDERS:
         default_provider = "claude"
     initial = _provider_option(default_provider)
+    host_blocks = (
+        [_host_block(hosts, default_host)] if hosts and len(hosts) > 1 else []
+    )
     return {
         "type": "modal",
         "callback_id": "ccslack_new_modal",
@@ -71,6 +102,7 @@ def build_new_session_view(
                     },
                 },
             },
+            *host_blocks,
             {
                 "type": "input",
                 "block_id": "provider_block",
@@ -169,6 +201,13 @@ def register(app: AsyncApp) -> None:
         branch = (
             state_values.get("branch_block", {}).get("branch", {}).get("value") or ""
         ).strip() or None
+        host = (
+            state_values.get("host_block", {})
+            .get("host", {})
+            .get("selected_option", {})
+            .get("value")
+            or ""
+        )
 
         if not directory:
             with contextlib.suppress(SlackApiError):
@@ -177,6 +216,24 @@ def register(app: AsyncApp) -> None:
                     user=user_id,
                     text="ccslack: modal submitted without a directory.",
                 )
+            return
+
+        # Multi-host: a remote host is created there by forwarding a synthetic
+        # `/ccslack new … --host <host>` to that worker (reuses the link path).
+        from .. import fleet_state
+
+        if host and host != config.host_name and fleet_state.is_fleet():
+            await _forward_new(
+                client,
+                meta_channel=meta_channel,
+                user_id=user_id,
+                directory=directory,
+                provider=provider,
+                want_worktree=want_worktree,
+                branch=branch,
+                want_yolo=want_yolo,
+                host=host,
+            )
             return
 
         # Lazy: meta._create_session reuses the same validation + creation flow.
@@ -194,10 +251,78 @@ def register(app: AsyncApp) -> None:
         )
 
 
+def _build_new_text(
+    *,
+    directory: str,
+    provider: str,
+    want_worktree: bool,
+    branch: str | None,
+    want_yolo: bool,
+    host: str,
+) -> str:
+    """Reconstruct the ``new …`` slash text (CLI form) for forwarding to a worker."""
+    import shlex
+
+    parts = ["new", shlex.quote(directory), provider]
+    if want_worktree:
+        parts.append("--worktree")
+        if branch:
+            parts.append(shlex.quote(branch))
+    if want_yolo:
+        parts.append("--yolo")
+    parts += ["--host", host]
+    return " ".join(parts)
+
+
+async def _forward_new(
+    client,  # noqa: ANN001
+    *,
+    meta_channel: str,
+    user_id: str,
+    directory: str,
+    provider: str,
+    want_worktree: bool,
+    branch: str | None,
+    want_yolo: bool,
+    host: str,
+) -> None:
+    """Forward a synthetic ``/ccslack new … --host <host>`` to the chosen worker."""
+    from .. import fleet_state
+
+    payload = {
+        "command": config.slash_command,
+        "text": _build_new_text(
+            directory=directory,
+            provider=provider,
+            want_worktree=want_worktree,
+            branch=branch,
+            want_yolo=want_yolo,
+            host=host,
+        ),
+        "channel_id": meta_channel,
+        "user_id": user_id,
+        "trigger_id": "",
+        "response_url": "",
+    }
+    ok = await fleet_state.forward(host, payload)
+    if not ok:
+        with contextlib.suppress(SlackApiError):
+            await client.chat_postEphemeral(
+                channel=meta_channel,
+                user=user_id,
+                text=f"ccslack: couldn't reach host `{host}` to start the session.",
+            )
+
+
 async def open_modal(client, *, trigger_id: str, meta_channel: str) -> None:  # noqa: ANN001
     """Open the new-session modal in response to a trigger_id."""
+    from .. import fleet_state
+
     view = build_new_session_view(
-        default_provider=config.provider_name, private_metadata=meta_channel
+        default_provider=config.provider_name,
+        private_metadata=meta_channel,
+        hosts=fleet_state.hosts(),
+        default_host=config.host_name,
     )
     try:
         await client.views_open(trigger_id=trigger_id, view=view)
