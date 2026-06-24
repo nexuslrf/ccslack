@@ -10,6 +10,7 @@ before.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from .config import config
@@ -21,6 +22,9 @@ _router: Router | None = None
 # Configured workers as (host, ssh_target) — lets fleet_status show hosts that
 # are configured but currently disconnected.
 _workers: list[tuple[str, str]] = []
+# Async callable returning remote session rows (set by the router to the fleet's
+# gather_sessions). None when not a router.
+_session_gatherer: Callable[[], Awaitable[list[dict[str, object]]]] | None = None
 
 
 def install_router(router: Router) -> None:
@@ -35,11 +39,27 @@ def set_workers(workers: list[tuple[str, str]]) -> None:
     _workers = list(workers)
 
 
+def set_session_gatherer(
+    gatherer: Callable[[], Awaitable[list[dict[str, object]]]],
+) -> None:
+    """Register the coroutine that gathers remote workers' sessions (router)."""
+    global _session_gatherer
+    _session_gatherer = gatherer
+
+
+async def remote_sessions() -> list[dict[str, object]]:
+    """Gather connected workers' session rows (each tagged ``host``). [] if not fleet."""
+    if _session_gatherer is None:
+        return []
+    return await _session_gatherer()
+
+
 def reset() -> None:
     """Clear installed state (test isolation)."""
-    global _router, _workers
+    global _router, _workers, _session_gatherer
     _router = None
     _workers = []
+    _session_gatherer = None
 
 
 def is_fleet() -> bool:
@@ -117,6 +137,8 @@ __all__ = [
     "install_router",
     "is_fleet",
     "remote_channels",
+    "remote_sessions",
     "reset",
+    "set_session_gatherer",
     "set_workers",
 ]

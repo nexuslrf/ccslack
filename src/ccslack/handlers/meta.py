@@ -1859,6 +1859,9 @@ async def _handle_thread(
     )
 
 
+# Dashboard kill value parts: "channel|window" local, "+|host" when remote.
+_KILL_VALUE_WITH_HOST = 3
+
 _STATUS_EMOJI = {
     "active": ":large_green_circle:",
     "idle": ":large_yellow_circle:",
@@ -1867,10 +1870,73 @@ _STATUS_EMOJI = {
 }
 
 
+def collect_session_rows() -> list[dict[str, str]]:
+    """Describe this host's bound sessions (used by the dashboard + worker RPC)."""
+    rows: list[dict[str, str]] = []
+    for ch_id, window_id in thread_router.channel_bindings.items():
+        view = session_manager.view_window(window_id)
+        ws = window_store.window_states.get(window_id)
+        rows.append(
+            {
+                "channel": ch_id,
+                "window": window_id,
+                "provider": (view.provider_name if view else "") or "?",
+                "cwd": (view.cwd if view else "") or "?",
+                "display": thread_router.get_display_name(window_id) or "",
+                "state": (ws.status_state if ws else "idle") or "idle",
+            }
+        )
+    return rows
+
+
+def _session_block(row: dict[str, str], *, host: str = "") -> dict[str, Any]:
+    """One dashboard row (section + Kill button). ``host`` tags a remote row."""
+    emoji = _STATUS_EMOJI.get(row["state"], ":grey_question:")
+    ch_id, window_id = row["channel"], row["window"]
+    host_tag = f" · `{host}`" if host else ""
+    # Kill value: channel|window for local; channel|window|host for remote so the
+    # dashboard Kill button can forward to the owning worker.
+    kill_value = f"{ch_id}|{window_id}" + (f"|{host}" if host else "")
+    return {
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": (
+                f"{emoji} <#{ch_id}> · `{row['provider']}` · `{window_id}` "
+                f"({row['display']}){host_tag}\n`{row['cwd']}`"
+            ),
+        },
+        "accessory": {
+            "type": "button",
+            "action_id": "ccslack_dashboard_kill",
+            "style": "danger",
+            "text": {"type": "plain_text", "text": ":wastebasket: Kill"},
+            "value": kill_value,
+            "confirm": {
+                "title": {"type": "plain_text", "text": "Kill session?"},
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"Kills tmux `{window_id}` and archives <#{ch_id}>.",
+                },
+                "confirm": {"type": "plain_text", "text": "Kill"},
+                "deny": {"type": "plain_text", "text": "Cancel"},
+            },
+        },
+    }
+
+
 async def _handle_sessions(client, channel_id: str, user_id: str) -> None:  # noqa: ANN001
-    """``/ccslack sessions`` — Block Kit dashboard with per-row Kill button."""
-    bindings = list(thread_router.channel_bindings.items())
-    if not bindings:
+    """``/ccslack sessions`` — Block Kit dashboard with per-row Kill button.
+
+    In a multi-host fleet this merges the router's own sessions with each
+    connected worker's (gathered over the link), tagging remote rows by host.
+    """
+    from .. import fleet_state
+
+    local_rows = collect_session_rows()
+    remote_rows = await fleet_state.remote_sessions()
+    total = len(local_rows) + len(remote_rows)
+    if total == 0:
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
@@ -1882,55 +1948,20 @@ async def _handle_sessions(client, channel_id: str, user_id: str) -> None:  # no
     blocks: list[dict[str, Any]] = [
         {
             "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*Active ccslack sessions* ({len(bindings)})",
-            },
+            "text": {"type": "mrkdwn", "text": f"*Active ccslack sessions* ({total})"},
         },
         {"type": "divider"},
     ]
-    for ch_id, window_id in bindings:
-        view = session_manager.view_window(window_id)
-        ws = window_store.window_states.get(window_id)
-        provider = (view.provider_name if view else "") or "?"
-        cwd = (view.cwd if view else "") or "?"
-        state = (ws.status_state if ws else "idle") or "idle"
-        emoji = _STATUS_EMOJI.get(state, ":grey_question:")
-        display = thread_router.get_display_name(window_id)
-        blocks.append(
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": (
-                        f"{emoji} <#{ch_id}> · `{provider}` · `{window_id}` "
-                        f"({display})\n`{cwd}`"
-                    ),
-                },
-                "accessory": {
-                    "type": "button",
-                    "action_id": "ccslack_dashboard_kill",
-                    "style": "danger",
-                    "text": {"type": "plain_text", "text": ":wastebasket: Kill"},
-                    "value": f"{ch_id}|{window_id}",
-                    "confirm": {
-                        "title": {"type": "plain_text", "text": "Kill session?"},
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"Kills tmux `{window_id}` and archives <#{ch_id}>.",
-                        },
-                        "confirm": {"type": "plain_text", "text": "Kill"},
-                        "deny": {"type": "plain_text", "text": "Cancel"},
-                    },
-                },
-            }
-        )
+    blocks.extend(_session_block(row) for row in local_rows)
+    blocks.extend(
+        _session_block(row, host=str(row.get("host", ""))) for row in remote_rows
+    )
 
     await _post_ephemeral(
         client.chat_postEphemeral,
         channel=channel_id,
         user=user_id,
-        text=f"Active ccslack sessions: {len(bindings)}",
+        text=f"Active ccslack sessions: {total}",
         blocks=blocks,
     )
 
@@ -2200,10 +2231,33 @@ def register_dashboard_actions(app) -> None:  # noqa: ANN001
                 break
         if "|" not in target:
             return
-        target_channel, target_window = target.split("|", 1)
-        result = await _kill_one(client, target_channel, target_window)
-        # Reply ephemerally in the channel where the dashboard was posted.
+        # value: "channel|window" (local) or "channel|window|host" (remote).
+        parts = target.split("|")
+        target_channel, target_window = parts[0], parts[1]
+        host = parts[2] if len(parts) >= _KILL_VALUE_WITH_HOST else ""
         dash_channel = body.get("channel", {}).get("id", "")
+
+        from .. import fleet_state
+
+        if host and host != config.host_name and fleet_state.is_fleet():
+            # Remote session: forward a `kill <#channel>` to the owning worker.
+            payload = {
+                "command": config.slash_command,
+                "text": f"kill <#{target_channel}>",
+                "channel_id": config.meta_channel_id,
+                "user_id": user_id,
+                "trigger_id": "",
+                "response_url": "",
+            }
+            ok = await fleet_state.forward(host, payload)
+            result = (
+                f":wastebasket: kill sent to host `{host}` for <#{target_channel}>."
+                if ok
+                else f"ccslack: couldn't reach host `{host}` to kill the session."
+            )
+        else:
+            result = await _kill_one(client, target_channel, target_window)
+        # Reply ephemerally in the channel where the dashboard was posted.
         if dash_channel:
             await _post_ephemeral(
                 client.chat_postEphemeral,

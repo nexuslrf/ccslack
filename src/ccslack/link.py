@@ -7,9 +7,11 @@ the **router** connects (through the tunnel) as the client. Message kinds:
     {"t": "hello",  "host": <str>, "channels": [<channel_id>, ...]}  # on connect
     {"t": "bind",   "channel": <channel_id>}     # a session was (re)bound here
     {"t": "unbind", "channel": <channel_id>}     # a session ended here
+    {"t": "sessions_rep", "id": <int>, "sessions": [<row>, ...]}     # RPC reply
     {"t": "pong"}
   router → worker:
     {"t": "event",  "payload": {<raw Slack event>}}   # dispatch into the app
+    {"t": "sessions_req", "id": <int>}                # ask for this host's sessions
     {"t": "ping"}
 
 Framing is one JSON object per line. Both ends use :func:`read_msg` /
@@ -28,6 +30,8 @@ HELLO = "hello"
 BIND = "bind"
 UNBIND = "unbind"
 EVENT = "event"
+SESSIONS_REQ = "sessions_req"
+SESSIONS_REP = "sessions_rep"
 PING = "ping"
 PONG = "pong"
 
@@ -64,6 +68,8 @@ __all__ = [
     "HELLO",
     "PING",
     "PONG",
+    "SESSIONS_REP",
+    "SESSIONS_REQ",
     "UNBIND",
     "event",
     "hello",

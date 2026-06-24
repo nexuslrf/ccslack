@@ -173,6 +173,9 @@ class WorkerLink:
         self._task: asyncio.Task[None] | None = None
         self._stopping = False
         self._was_connected = False
+        # Outstanding sessions RPCs: request id -> Future[list[rows]].
+        self._pending: dict[int, asyncio.Future[list[dict[str, Any]]]] = {}
+        self._req_seq = 0
 
     async def _announce(self, text: str) -> None:
         if self._notify is None:
@@ -206,6 +209,23 @@ class WorkerLink:
         except (ConnectionError, OSError):
             return False
 
+    async def request_sessions(self, timeout: float) -> list[dict[str, Any]]:
+        """Ask the worker for its sessions. Returns [] on down link / timeout."""
+        writer = self._writer
+        if writer is None:
+            return []
+        self._req_seq += 1
+        req_id = self._req_seq
+        future: asyncio.Future[list[dict[str, Any]]] = asyncio.get_event_loop().create_future()
+        self._pending[req_id] = future
+        try:
+            await link.write_msg(writer, {"t": link.SESSIONS_REQ, "id": req_id})
+            return await asyncio.wait_for(future, timeout=timeout)
+        except (ConnectionError, OSError, asyncio.TimeoutError):
+            return []
+        finally:
+            self._pending.pop(req_id, None)
+
     async def _run(self) -> None:
         backoff = _BACKOFF_START
         while not self._stopping:
@@ -235,6 +255,11 @@ class WorkerLink:
                     await ping
                 self._writer = None
                 self._router.drop_host(self._host)
+                # Fail any in-flight RPCs so callers don't hang to timeout.
+                for future in self._pending.values():
+                    if not future.done():
+                        future.set_result([])
+                self._pending.clear()
                 with contextlib.suppress(Exception):
                     writer.close()
                 logger.warning("worker link to %s disconnected", self._host)
@@ -261,6 +286,11 @@ class WorkerLink:
             channel = msg.get("channel")
             if channel:
                 self._router.unbind(self._host, channel)
+        elif tag == link.SESSIONS_REP:
+            future = self._pending.get(msg.get("id"))
+            if future is not None and not future.done():
+                rows = msg.get("sessions")
+                future.set_result(rows if isinstance(rows, list) else [])
         # PONG: liveness only — no action needed.
 
     async def _ping_loop(self, writer: asyncio.StreamWriter) -> None:
@@ -319,6 +349,20 @@ class RouterFleet:
         if worker_link is None:
             return False
         return await worker_link.forward(payload)
+
+    async def gather_sessions(self, timeout: float = 3.0) -> list[dict[str, Any]]:
+        """Query every connected worker for its sessions, tagged by host."""
+        links = list(self._links.items())
+        if not links:
+            return []
+        results = await asyncio.gather(
+            *(wl.request_sessions(timeout) for _host, wl in links)
+        )
+        rows: list[dict[str, Any]] = []
+        for (host, _wl), host_rows in zip(links, results, strict=True):
+            for row in host_rows:
+                rows.append({**row, "host": host})
+        return rows
 
 
 __all__ = [

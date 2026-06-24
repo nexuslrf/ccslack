@@ -92,6 +92,7 @@ def router(host_name: str | None) -> None:
             notify = _notify
 
         fleet = RouterFleet(router_obj, specs, notify=notify)
+        fleet_state.set_session_gatherer(fleet.gather_sessions)
         await fleet.start()
         try:
             await asyncio.Event().wait()

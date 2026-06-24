@@ -195,6 +195,17 @@ class RouterLinkSource(EventSource):
                     payload = msg.get("payload")
                     if isinstance(payload, dict):
                         await dispatch_payload(self._app, payload)
+                elif tag == link.SESSIONS_REQ:
+                    # Lazy: meta owns the shared session-row collector.
+                    from .handlers.meta import collect_session_rows
+
+                    outbound.put_nowait(
+                        {
+                            "t": link.SESSIONS_REP,
+                            "id": msg.get("id"),
+                            "sessions": collect_session_rows(),
+                        }
+                    )
                 elif tag == link.PING:
                     outbound.put_nowait({"t": link.PONG})
         finally:

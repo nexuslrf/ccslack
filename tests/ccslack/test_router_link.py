@@ -144,6 +144,43 @@ async def test_worker_link_registry_forward_and_disconnect():
 
 
 @pytest.mark.asyncio
+async def test_sessions_rpc_over_link(monkeypatch):
+    from ccslack.session import session_manager
+
+    # Worker owns one session with detail.
+    session_manager.set_window_provider("@7", "codex", cwd="/work/proj")
+    thread_router.bind_channel("Cws", "@7", window_name="proj")
+
+    worker_app = _app()
+    worker = RouterLinkSource(worker_app, host="gpu1", port=0)
+    await worker.start()
+
+    router = Router(local_host="r0")
+
+    async def _connect():
+        return await asyncio.open_connection("127.0.0.1", worker.port)
+
+    worker_link = WorkerLink("gpu1", _connect, router)
+    await worker_link.start()
+    try:
+        await _settle(lambda: router.host_for_channel("Cws") == "gpu1")
+        rows = await worker_link.request_sessions(timeout=2.0)
+        assert len(rows) == 1
+        assert rows[0]["channel"] == "Cws"
+        assert rows[0]["provider"] == "codex"
+        assert rows[0]["cwd"] == "/work/proj"
+    finally:
+        await worker_link.stop()
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_request_sessions_returns_empty_when_link_down():
+    worker_link = WorkerLink("gpu1", None, Router("r0"))  # never started
+    assert await worker_link.request_sessions(timeout=0.2) == []
+
+
+@pytest.mark.asyncio
 async def test_worker_link_notifies_connect_and_disconnect():
     worker_app = _app()
     worker = RouterLinkSource(worker_app, host="gpu1", port=0)
