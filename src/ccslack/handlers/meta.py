@@ -319,6 +319,10 @@ def register(app: AsyncApp) -> None:
             await _handle_sessions(client, channel_id, user_id)
             return
 
+        if sub == "fleet":
+            await _handle_fleet(client, channel_id, user_id)
+            return
+
         if sub == "history":
             # Lazy: history pulls transcript reader.
             from .history import handle_history
@@ -391,6 +395,7 @@ def _help_text() -> str:
         "(multi-host router).\n"
         f"• `{slash} list` — quick list of active sessions.\n"
         f"• `{slash} sessions` — interactive dashboard with per-session kill.\n"
+        f"• `{slash} fleet` — multi-host: per-host connection + session status.\n"
         f"• `{slash} history [N]` — last N transcript messages in this channel.\n"
         f"• `{slash} resume` — pick a past Claude session in this channel's cwd.\n"
         f"• `{slash} restore [continue|resume|fresh]` — respawn a dead session "
@@ -887,6 +892,40 @@ async def _handle_list(client, channel_id: str, user_id: str) -> None:  # noqa: 
         channel=channel_id,
         user=user_id,
         text="\n".join(line for line in lines if line),
+    )
+
+
+async def _handle_fleet(client, channel_id: str, user_id: str) -> None:  # noqa: ANN001
+    """Implements ``/ccslack fleet`` — per-host status in a multi-host router."""
+    from .. import fleet_state
+
+    rows = fleet_state.fleet_status()
+    if not rows:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                "ccslack: not a multi-host router (no workers configured). "
+                "See `docs/multi-host.md`."
+            ),
+        )
+        return
+
+    lines = ["*Fleet status*"]
+    for row in rows:
+        dot = ":large_green_circle:" if row["connected"] else ":red_circle:"
+        sessions = row["sessions"]
+        sess = f"{sessions} session{'s' if sessions != 1 else ''}"
+        role = "router" if row["role"] == "router" else "worker"
+        ssh = f" · `{row['ssh']}`" if row["ssh"] else ""
+        state = "" if row["connected"] else " · *disconnected*"
+        lines.append(f"{dot} `{row['host']}` ({role}) — {sess}{ssh}{state}")
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text="\n".join(lines),
     )
 
 

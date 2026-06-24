@@ -77,19 +77,21 @@ def router(host_name: str | None) -> None:
     async def _main() -> None:
         app = create_app()
         router_obj = Router(local_host=host_name or config.host_name)
+        specs = parse_workers(config.workers_raw, config.link_port)
         fleet_state.install_router(router_obj)
+        fleet_state.set_workers([(s.host, s.ssh_target) for s in specs])
         await start_event_source(app, RouterSource(app, router_obj))
 
-        meta_client = BoltSlackClient(app.client)
+        notify = None
+        if config.fleet_notify:
+            meta_client = BoltSlackClient(app.client)
 
-        async def _notify(text: str) -> None:
-            await safe_post(meta_client, channel=config.meta_channel_id, text=text)
+            async def _notify(text: str) -> None:
+                await safe_post(meta_client, channel=config.meta_channel_id, text=text)
 
-        fleet = RouterFleet(
-            router_obj,
-            parse_workers(config.workers_raw, config.link_port),
-            notify=_notify,
-        )
+            notify = _notify
+
+        fleet = RouterFleet(router_obj, specs, notify=notify)
         await fleet.start()
         try:
             await asyncio.Event().wait()

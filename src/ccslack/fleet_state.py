@@ -18,6 +18,9 @@ if TYPE_CHECKING:
     from .router import Router
 
 _router: Router | None = None
+# Configured workers as (host, ssh_target) — lets fleet_status show hosts that
+# are configured but currently disconnected.
+_workers: list[tuple[str, str]] = []
 
 
 def install_router(router: Router) -> None:
@@ -26,10 +29,17 @@ def install_router(router: Router) -> None:
     _router = router
 
 
+def set_workers(workers: list[tuple[str, str]]) -> None:
+    """Register the configured worker (host, ssh_target) list (router process)."""
+    global _workers
+    _workers = list(workers)
+
+
 def reset() -> None:
     """Clear installed state (test isolation)."""
-    global _router
+    global _router, _workers
     _router = None
+    _workers = []
 
 
 def is_fleet() -> bool:
@@ -56,10 +66,49 @@ def remote_channels() -> dict[str, str]:
     }
 
 
+def fleet_status() -> list[dict[str, object]]:
+    """Per-host status rows for ``/ccslack fleet`` (empty when not a router).
+
+    Row: ``{host, role, connected, sessions, ssh}``. The local host (the router
+    itself) is always connected; configured workers show even when disconnected.
+    """
+    if _router is None:
+        return []
+    # Lazy: thread_router is wired by SessionManager.
+    from .thread_router import thread_router
+
+    counts: dict[str, int] = {}
+    for _channel, host in _router.channel_host_items():
+        counts[host] = counts.get(host, 0) + 1
+
+    rows: list[dict[str, object]] = [
+        {
+            "host": config.host_name,
+            "role": "router",
+            "connected": True,
+            "sessions": len(thread_router.channel_bindings),
+            "ssh": "",
+        }
+    ]
+    for host, ssh_target in _workers:
+        rows.append(
+            {
+                "host": host,
+                "role": "worker",
+                "connected": host in _router.connected_hosts,
+                "sessions": counts.get(host, 0),
+                "ssh": ssh_target,
+            }
+        )
+    return rows
+
+
 __all__ = [
+    "fleet_status",
     "hosts",
     "install_router",
     "is_fleet",
     "remote_channels",
     "reset",
+    "set_workers",
 ]

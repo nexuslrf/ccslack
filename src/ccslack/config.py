@@ -234,6 +234,13 @@ class Config:
         # Empty = single-host router (behaves like standalone). Parsed by
         # router_link.parse_workers.
         self.workers_raw: str = os.getenv("CCSLACK_WORKERS", "")
+        # Post host connect/disconnect lines to the meta channel. Default off —
+        # check status on demand with `/ccslack fleet` instead.
+        self.fleet_notify: bool = os.getenv("CCSLACK_FLEET_NOTIFY", "false").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
 
     def _init_feature_flags(self) -> None:
         # Global default for hiding tool_use/tool_result content.

@@ -2,7 +2,7 @@ import pytest
 
 from ccslack import fleet_state
 from ccslack.config import config
-from ccslack.handlers.meta import _handle_list, _handle_new
+from ccslack.handlers.meta import _handle_fleet, _handle_list, _handle_new
 from ccslack.router import Router
 from ccslack.session import session_manager
 from ccslack.slack_client import FakeSlackClient
@@ -47,6 +47,31 @@ async def test_new_host_matching_local_proceeds(monkeypatch, tmp_path):
     await _handle_new(client, "C0META", "U1", [str(tmp_path), "shell", "--host", "gpu1"])
 
     assert spawned.get("work_dir") == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_fleet_shows_per_host_status(monkeypatch):
+    monkeypatch.setattr(config, "host_name", "r0")
+    r = Router(local_host="r0")
+    r.set_host_channels("gpu1", ["C1"])
+    fleet_state.install_router(r)
+    fleet_state.set_workers([("gpu1", "user@gpu1"), ("gpu2", "gpu2-alias")])
+    client = FakeSlackClient()
+
+    await _handle_fleet(client, "C0META", "U1")
+
+    text = client.last_call("chat_postEphemeral").kwargs["text"]
+    assert "Fleet status" in text
+    assert "`r0`" in text and "`gpu1`" in text and "`gpu2`" in text
+    assert "disconnected" in text  # gpu2 never connected
+
+
+@pytest.mark.asyncio
+async def test_fleet_not_a_router(monkeypatch):
+    fleet_state.reset()
+    client = FakeSlackClient()
+    await _handle_fleet(client, "C0META", "U1")
+    assert "not a multi-host router" in client.last_call("chat_postEphemeral").kwargs["text"]
 
 
 @pytest.mark.asyncio
