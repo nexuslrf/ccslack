@@ -124,6 +124,7 @@ class RouterLinkSource(EventSource):
         self._port = port
         self._server: asyncio.AbstractServer | None = None
         self._outbound: asyncio.Queue[dict[str, Any]] | None = None
+        self._active_writer: asyncio.StreamWriter | None = None
 
     @property
     def port(self) -> int:
@@ -151,12 +152,18 @@ class RouterLinkSource(EventSource):
         from .thread_router import thread_router
 
         thread_router.remove_binding_listener(self._on_binding_change)
+        # Close the active router connection first so its handler loop unblocks
+        # from read — otherwise wait_closed() can hang on the open connection.
+        if self._active_writer is not None:
+            with contextlib.suppress(Exception):
+                self._active_writer.close()
         if self._server is not None:
             self._server.close()
             with contextlib.suppress(Exception):
-                await self._server.wait_closed()
+                await asyncio.wait_for(self._server.wait_closed(), timeout=2.0)
             self._server = None
         self._outbound = None
+        self._active_writer = None
 
     def _on_binding_change(self, action: str, channel_id: str) -> None:
         # Sync, fired on the loop during event handling. Only push while the
@@ -171,6 +178,7 @@ class RouterLinkSource(EventSource):
 
         outbound: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._outbound = outbound
+        self._active_writer = writer
         await link.write_msg(
             writer, link.hello(self._host, list(thread_router.channel_bindings))
         )
@@ -197,6 +205,8 @@ class RouterLinkSource(EventSource):
                 writer.close()
             if self._outbound is outbound:
                 self._outbound = None
+            if self._active_writer is writer:
+                self._active_writer = None
             logger.info("Router disconnected from worker link: %s", peer)
 
     @staticmethod

@@ -230,6 +230,10 @@ class Config:
 
         self.host_name: str = os.getenv("CCSLACK_HOST") or socket.gethostname()
         self.link_port: int = _parse_int_env("CCSLACK_LINK_PORT", 8765)
+        # Router-only: comma-separated `host=ssh_target` workers to tunnel to.
+        # Empty = single-host router (behaves like standalone). Parsed by
+        # router_link.parse_workers.
+        self.workers_raw: str = os.getenv("CCSLACK_WORKERS", "")
 
     def _init_feature_flags(self) -> None:
         # Global default for hiding tool_use/tool_result content.

@@ -69,14 +69,20 @@ def router(host_name: str | None) -> None:
     from .bot import create_app, start_event_source, stop_event_source
     from .config import config
     from .router import Router, RouterSource
+    from .router_link import RouterFleet, parse_workers
 
     async def _main() -> None:
         app = create_app()
-        source = RouterSource(app, Router(local_host=host_name or config.host_name))
-        await start_event_source(app, source)
+        router_obj = Router(local_host=host_name or config.host_name)
+        await start_event_source(app, RouterSource(app, router_obj))
+        fleet = RouterFleet(
+            router_obj, parse_workers(config.workers_raw, config.link_port)
+        )
+        await fleet.start()
         try:
             await asyncio.Event().wait()
         finally:
+            await fleet.stop()
             await stop_event_source()
 
     try:
