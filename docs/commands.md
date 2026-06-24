@@ -77,12 +77,21 @@ by another host, with that host's name.
 - **Where**: meta channel only.
 - **Auth**: `ALLOWED_USERS`.
 
+### `/ccslack fleet`
+
+Multi-host only: per-host status — each configured host with a connected/
+disconnected dot, session count, and ssh target. See
+[multi-host.md](multi-host.md).
+
+- **Where**: meta channel only.
+- **Auth**: `ALLOWED_USERS`.
+
 ### `/ccslack sessions`
 
 Interactive Block Kit dashboard. Each row: state emoji, channel mention,
 provider, tmux window ID, display name, cwd, **🗑️ Kill button** with
-confirm modal. (In a fleet, this dashboard currently lists the **router host's**
-sessions only — see [multi-host.md](multi-host.md#limits).)
+confirm modal. In a [multi-host fleet](multi-host.md) it merges every host's
+sessions (each remote row tagged by host), and the Kill button works cross-host.
 
 - **Where**: meta channel only.
 - **Auth**: `ALLOWED_USERS`.

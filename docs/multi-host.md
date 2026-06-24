@@ -135,10 +135,12 @@ channel.
 
 | Action | Routes by | Notes |
 |---|---|---|
+| `/ccslack new` (no args) | modal | The modal shows a **Host** dropdown — pick the target host, no `--host` needed. |
 | `/ccslack new <dir> … --host gpu1` | `--host` | Creates the session on `gpu1`. Omit `--host` → the **router's own host**. A bad/disconnected `--host` is rejected with the available host list. |
 | A message / button / `/ccslack kill`,`send`,`purge`,… in a session channel | `channel_id` | Goes to the owning host automatically — nothing to specify. |
 | `/ccslack list` | — | Shows local sessions (detailed) **plus** a *remote* section: each remote channel and its host. |
-| `/ccslack sessions` | — | Dashboard shows the **router host's** sessions only (a cross-host detail merge isn't implemented yet — see [Limits](#limits)). |
+| `/ccslack sessions` | — | Dashboard merges **all hosts'** sessions (gathered over the link), each tagged by host; the Kill button works cross-host. |
+| `/ccslack fleet` | — | Per-host status: connected/disconnected, session count, ssh target. |
 
 Everything else — purge, screenshots, the file browser, chat threads, `adduser`
 grants — works per session channel and routes by `channel_id`, so it's
@@ -148,14 +150,20 @@ transparent across hosts.
 
 ## Reconnects & manual auth
 
-Tunnels are supervised with keepalives and restart with backoff. When one drops,
-the router posts **`:warning: host \`gpu1\` disconnected — reconnecting (may need
-manual SSH auth at the router console).`** in the meta channel. The worker
-process keeps running through the drop, so on reconnect it just re-attaches and
-re-sends its channel snapshot — **sessions don't die**.
+Tunnels are supervised with keepalives and restart with backoff. The worker
+process keeps running through a drop, so on reconnect it just re-attaches and
+re-sends its channel snapshot — **sessions don't die**. (Host up/down lines are
+silent by default; check `/ccslack fleet`, or set `CCSLACK_FLEET_NOTIFY=true`.)
 
-If the reconnect needs an OTP / passphrase, the `ssh` subprocess inherits the
-router's stdio, so answer the prompt at the router console.
+**Answering SSH 2FA from Slack.** By default the `ssh` subprocess inherits the
+router's stdio, so an OTP / passphrase prompt is answered at the router console.
+Set **`CCSLACK_SSH_INTERACTIVE=true`** to instead run each tunnel under a PTY and
+forward the auth prompt (e.g. Duo) to the meta channel: ccslack posts the prompt
+with a **button per option** (`1 · Duo Push to …`) and a **Passcode…** modal, and
+your click/answer is written back to the waiting `ssh`. Tune
+`CCSLACK_SSH_PROMPT_RE` to your server's prompt wording. Answering is gated to
+`ALLOWED_USERS`. Heads-up: this means an allow-listed user approves your SSH 2FA
+from Slack.
 
 ---
 
@@ -175,11 +183,10 @@ router's stdio, so answer the prompt at the router console.
 
 ## Limits
 
-- `/ccslack sessions` (interactive dashboard) is **router-host-local**; a
-  cross-host merge needs a per-session detail RPC over the link.
-- No standby/HA router.
-- `--host` is a flag, not a picker; the no-arg `/ccslack new` modal always
-  targets the router host.
+- No standby/HA router (Slack allows a second connection for failover — not
+  wired yet).
+- SSH-2FA-over-Slack prompt detection is heuristic (`CCSLACK_SSH_PROMPT_RE`);
+  tune it to your server.
 
 ---
 

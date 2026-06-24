@@ -42,6 +42,12 @@ _PING_INTERVAL = 15.0
 Connect = Callable[[], Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]]]
 # Posts a short fleet status line to the meta channel (host up/down). Best-effort.
 Notify = Callable[[str], Awaitable[None]]
+# Called with (host, prompt_text, options) when an SSH tunnel needs interactive
+# auth (e.g. Duo). ``options`` is the parsed numbered choices.
+OnPrompt = Callable[[str, str, "list[tuple[str, str]]"], Awaitable[None]]
+
+# Cap the captured PTY buffer so it can't grow without bound between prompts.
+_PTY_BUF_MAX = 8000
 
 
 @dataclass(frozen=True)
@@ -87,11 +93,26 @@ def _free_local_port() -> int:
 
 
 class SshTunnel:
-    """A supervised ``ssh -N -L`` tunnel to one worker's link server."""
+    """A supervised ``ssh -N -L`` tunnel to one worker's link server.
 
-    def __init__(self, ssh_target: str, remote_port: int) -> None:
+    By default the ``ssh`` subprocess inherits the router's stdio, so any
+    interactive auth is answered at the console. When ``CCSLACK_SSH_INTERACTIVE``
+    is on and an ``on_prompt`` callback is given, it instead runs under a PTY and
+    bridges auth prompts to Slack (see :mod:`ccslack.ssh_auth`).
+    """
+
+    def __init__(
+        self,
+        ssh_target: str,
+        remote_port: int,
+        *,
+        host: str = "",
+        on_prompt: OnPrompt | None = None,
+    ) -> None:
         self.ssh_target = ssh_target
         self.remote_port = remote_port
+        self.host = host
+        self._on_prompt = on_prompt
         self.local_port = _free_local_port()
         self._proc: asyncio.subprocess.Process | None = None
         self._task: asyncio.Task[None] | None = None
@@ -130,16 +151,62 @@ class SshTunnel:
                 await asyncio.wait_for(self._proc.wait(), timeout=5)
         self._proc = None
 
+    def _interactive(self) -> bool:
+        from .config import config
+
+        return config.ssh_interactive and self._on_prompt is not None
+
+    async def _run_pty(self, cmd: list[str]) -> None:
+        """Run ssh under a PTY, bridging auth prompts to ``on_prompt``."""
+        from . import ssh_auth
+        from .config import config
+
+        buf = ""
+        last_fired = ""
+
+        async def _on_output(chunk: str) -> None:
+            nonlocal buf, last_fired
+            buf = (buf + ssh_auth.strip_ansi(chunk))[-_PTY_BUF_MAX:]
+            if (
+                ssh_auth.looks_like_prompt(buf, config.ssh_prompt_re)
+                and buf != last_fired
+            ):
+                last_fired = buf
+                if self._on_prompt is not None:
+                    await self._on_prompt(
+                        self.host, buf.strip(), ssh_auth.parse_options(buf)
+                    )
+
+        pty = ssh_auth.PtyProcess(cmd, _on_output)
+
+        async def _respond(text: str) -> bool:
+            nonlocal buf, last_fired
+            buf = ""
+            last_fired = ""
+            return await pty.write(text)
+
+        ssh_auth.register_responder(self.host, _respond)
+        try:
+            await pty.start()
+            await pty.wait()
+        finally:
+            ssh_auth.unregister_responder(self.host)
+            await pty.stop()
+
     async def _supervise(self) -> None:
         backoff = _BACKOFF_START
         while not self._stopping:
             cmd = self.build_command()
             logger.info("ssh tunnel up: %s (local :%d)", self.ssh_target, self.local_port)
             try:
-                # Inherit stdio so an operator at the router console can answer
-                # an interactive auth prompt (OTP) when SSH needs it.
-                self._proc = await asyncio.create_subprocess_exec(*cmd)
-                await self._proc.wait()
+                if self._interactive():
+                    # PTY-bridge interactive auth (Duo/2FA) to Slack.
+                    await self._run_pty(cmd)
+                else:
+                    # Inherit stdio so an operator at the router console can
+                    # answer an interactive auth prompt (OTP) when SSH needs it.
+                    self._proc = await asyncio.create_subprocess_exec(*cmd)
+                    await self._proc.wait()
             except (OSError, asyncio.CancelledError):
                 if self._stopping:
                     return
@@ -310,16 +377,23 @@ class RouterFleet:
         router: Router,
         workers: list[WorkerSpec],
         notify: Notify | None = None,
+        on_prompt: OnPrompt | None = None,
     ) -> None:
         self._router = router
         self._workers = workers
         self._notify = notify
+        self._on_prompt = on_prompt
         self._tunnels: dict[str, SshTunnel] = {}
         self._links: dict[str, WorkerLink] = {}
 
     async def start(self) -> None:
         for spec in self._workers:
-            tunnel = SshTunnel(spec.ssh_target, spec.remote_port)
+            tunnel = SshTunnel(
+                spec.ssh_target,
+                spec.remote_port,
+                host=spec.host,
+                on_prompt=self._on_prompt,
+            )
             await tunnel.start()
 
             async def _connect(

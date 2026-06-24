@@ -82,16 +82,26 @@ def router(host_name: str | None) -> None:
         fleet_state.set_workers([(s.host, s.ssh_target) for s in specs])
         await start_event_source(app, RouterSource(app, router_obj))
 
+        meta_client = BoltSlackClient(app.client)
+
         notify = None
         if config.fleet_notify:
-            meta_client = BoltSlackClient(app.client)
 
             async def _notify(text: str) -> None:
                 await safe_post(meta_client, channel=config.meta_channel_id, text=text)
 
             notify = _notify
 
-        fleet = RouterFleet(router_obj, specs, notify=notify)
+        on_prompt = None
+        if config.ssh_interactive:
+            from .handlers.ssh_prompt import post_prompt
+
+            async def _on_prompt(host: str, text: str, options: list) -> None:
+                await post_prompt(meta_client, host, text, options)
+
+            on_prompt = _on_prompt
+
+        fleet = RouterFleet(router_obj, specs, notify=notify, on_prompt=on_prompt)
         fleet_state.set_session_gatherer(fleet.gather_sessions)
         await fleet.start()
         try:

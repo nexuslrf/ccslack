@@ -40,6 +40,9 @@ guide: [multi-host.md](multi-host.md).
 | `CCSLACK_HOST` | hostname | all | This machine's name in the fleet (shown in `/ccslack list`, targeted by `new --host`). |
 | `CCSLACK_LINK_PORT` | `8765` | worker | Localhost port the worker's link server listens on (the router reaches it over an SSH tunnel — never exposed on the network). |
 | `CCSLACK_WORKERS` | empty | router | Comma-separated `host=ssh_target` entries, e.g. `gpu1=user@gpu1,gpu2=gpu2-alias`. Empty = single-host router (standalone behaviour). |
+| `CCSLACK_FLEET_NOTIFY` | `false` | router | Post host connect/disconnect lines to the meta channel. Off by default — use `/ccslack fleet` to check status on demand. |
+| `CCSLACK_SSH_INTERACTIVE` | `false` | router | Run SSH tunnels under a PTY and bridge interactive auth prompts (e.g. Duo 2FA) to the meta channel for a Slack-side response (option buttons + a passcode modal), instead of the console. |
+| `CCSLACK_SSH_PROMPT_RE` | *(Duo/password/2FA)* | router | Regex (searched against the prompt tail) marking "ssh is waiting for input". Tune to your server's prompt wording. |
 
 `SLACK_APP_TOKEN` is **router-only** in a fleet — a worker receives forwarded
 events instead of opening Socket Mode, so it runs without it.

@@ -241,6 +241,19 @@ class Config:
             "true",
             "yes",
         )
+        # Run SSH tunnels under a PTY and bridge interactive auth prompts (e.g.
+        # Duo 2FA) to the meta channel for a Slack-side response. Default off —
+        # the tunnel inherits the console for manual auth as usual.
+        self.ssh_interactive: bool = os.getenv(
+            "CCSLACK_SSH_INTERACTIVE", "false"
+        ).lower() in ("1", "true", "yes")
+        # Regex (search, multiline) marking the tail of an SSH auth prompt that's
+        # waiting for input. Tune to your server's prompt. Default matches common
+        # Duo / password / verification prompts ending in a colon.
+        self.ssh_prompt_re: str = os.getenv(
+            "CCSLACK_SSH_PROMPT_RE",
+            r"(?i)(passcode|password|verification code|two-factor|duo|option).*:\s*$",
+        )
 
     def _init_feature_flags(self) -> None:
         # Global default for hiding tool_use/tool_result content.
