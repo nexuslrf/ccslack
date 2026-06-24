@@ -354,7 +354,8 @@ class WorkerLink:
             if channel:
                 self._router.unbind(self._host, channel)
         elif tag == link.SESSIONS_REP:
-            future = self._pending.get(msg.get("id"))
+            req_id = msg.get("id")
+            future = self._pending.get(req_id) if isinstance(req_id, int) else None
             if future is not None and not future.done():
                 rows = msg.get("sessions")
                 future.set_result(rows if isinstance(rows, list) else [])

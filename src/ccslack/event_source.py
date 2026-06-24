@@ -26,6 +26,7 @@ from . import link
 from .config import config
 
 if TYPE_CHECKING:
+    from slack_bolt.adapter.socket_mode.aiohttp import AsyncSocketModeHandler
     from slack_bolt.async_app import AsyncApp
 
 logger = structlog.get_logger()
@@ -69,9 +70,9 @@ class SocketModeSource(EventSource):
 
     def __init__(self, app: AsyncApp) -> None:
         self._app = app
-        # Lazy type: the aiohttp adapter is imported at start() to keep the
-        # import graph lean for processes that never open a socket.
-        self._handler: object | None = None
+        # The aiohttp adapter is imported lazily at start() to keep the import
+        # graph lean for processes that never open a socket.
+        self._handler: AsyncSocketModeHandler | None = None
 
     async def start(self) -> None:
         if not config.slack_app_token:
@@ -122,7 +123,7 @@ class RouterLinkSource(EventSource):
         self._host = host
         self._bind_host = bind_host
         self._port = port
-        self._server: asyncio.AbstractServer | None = None
+        self._server: asyncio.Server | None = None
         self._outbound: asyncio.Queue[dict[str, Any]] | None = None
         self._active_writer: asyncio.StreamWriter | None = None
 

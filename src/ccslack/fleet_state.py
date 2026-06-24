@@ -11,7 +11,7 @@ before.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .config import config
 
@@ -24,7 +24,7 @@ _router: Router | None = None
 _workers: list[tuple[str, str]] = []
 # Async callable returning remote session rows (set by the router to the fleet's
 # gather_sessions). None when not a router.
-_session_gatherer: Callable[[], Awaitable[list[dict[str, object]]]] | None = None
+_session_gatherer: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None
 
 
 def install_router(router: Router) -> None:
@@ -40,14 +40,14 @@ def set_workers(workers: list[tuple[str, str]]) -> None:
 
 
 def set_session_gatherer(
-    gatherer: Callable[[], Awaitable[list[dict[str, object]]]],
+    gatherer: Callable[[], Awaitable[list[dict[str, Any]]]],
 ) -> None:
     """Register the coroutine that gathers remote workers' sessions (router)."""
     global _session_gatherer
     _session_gatherer = gatherer
 
 
-async def remote_sessions() -> list[dict[str, object]]:
+async def remote_sessions() -> list[dict[str, Any]]:
     """Gather connected workers' session rows (each tagged ``host``). [] if not fleet."""
     if _session_gatherer is None:
         return []
@@ -86,7 +86,7 @@ def remote_channels() -> dict[str, str]:
     }
 
 
-async def forward(host: str, payload: dict[str, object]) -> bool:
+async def forward(host: str, payload: dict[str, Any]) -> bool:
     """Forward a raw Slack payload to *host*'s worker. False if not a router."""
     if _router is None:
         return False

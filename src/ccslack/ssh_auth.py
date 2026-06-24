@@ -131,7 +131,8 @@ class PtyProcess:
             return
         chunk = data.decode("utf-8", errors="replace")
         if self._loop is not None:
-            self._loop.create_task(self._on_output(chunk))
+            # ensure_future (not create_task): on_output is typed Awaitable.
+            asyncio.ensure_future(self._on_output(chunk), loop=self._loop)  # noqa: RUF006
 
     async def write(self, text: str) -> bool:
         if self._master_fd is None:

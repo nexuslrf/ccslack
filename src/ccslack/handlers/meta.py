@@ -1889,7 +1889,7 @@ def collect_session_rows() -> list[dict[str, str]]:
     return rows
 
 
-def _session_block(row: dict[str, str], *, host: str = "") -> dict[str, Any]:
+def _session_block(row: dict[str, Any], *, host: str = "") -> dict[str, Any]:
     """One dashboard row (section + Kill button). ``host`` tags a remote row."""
     emoji = _STATUS_EMOJI.get(row["state"], ":grey_question:")
     ch_id, window_id = row["channel"], row["window"]
