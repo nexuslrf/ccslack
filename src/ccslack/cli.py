@@ -58,6 +58,40 @@ def run() -> None:
 
 
 @cli.command()
+@click.option("--port", type=int, default=None, help="Localhost link port (default CCSLACK_LINK_PORT/8765).")
+@click.option("--host", "host_name", default=None, help="Host name reported to the router (default CCSLACK_HOST/hostname).")
+def worker(port: int | None, host_name: str | None) -> None:
+    """Run as a multi-host worker: drive local tmux, receive events from a router.
+
+    No Slack Socket Mode connection — the router (a separate `ccslack` on the
+    app token) forwards events here over an SSH tunnel; this process posts to
+    Slack directly with the bot token.
+    """
+    from .bot import create_app, start_event_source, stop_event_source
+    from .config import config
+    from .event_source import RouterLinkSource
+
+    async def _main() -> None:
+        app = create_app()
+        source = RouterLinkSource(
+            app,
+            host=host_name or config.host_name,
+            port=port if port is not None else config.link_port,
+        )
+        await start_event_source(app, source)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await stop_event_source()
+
+    try:
+        asyncio.run(_main())
+    except KeyboardInterrupt:
+        click.echo("\nShutdown requested.")
+        sys.exit(0)
+
+
+@cli.command()
 @click.option("--install", "action", flag_value="install")
 @click.option("--uninstall", "action", flag_value="uninstall")
 @click.option("--status", "action", flag_value="status")
