@@ -58,6 +58,35 @@ def run() -> None:
 
 
 @cli.command()
+@click.option("--host", "host_name", default=None, help="This router host's name (default CCSLACK_HOST/hostname).")
+def router(host_name: str | None) -> None:
+    """Run as the multi-host router: the single Socket Mode intake + dispatcher.
+
+    Holds the Slack connection and routes each event to the owning host's worker,
+    while also running sessions locally (double role). With no workers connected
+    this behaves exactly like a standalone `ccslack run`.
+    """
+    from .bot import create_app, start_event_source, stop_event_source
+    from .config import config
+    from .router import Router, RouterSource
+
+    async def _main() -> None:
+        app = create_app()
+        source = RouterSource(app, Router(local_host=host_name or config.host_name))
+        await start_event_source(app, source)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await stop_event_source()
+
+    try:
+        asyncio.run(_main())
+    except KeyboardInterrupt:
+        click.echo("\nShutdown requested.")
+        sys.exit(0)
+
+
+@cli.command()
 @click.option("--port", type=int, default=None, help="Localhost link port (default CCSLACK_LINK_PORT/8765).")
 @click.option("--host", "host_name", default=None, help="Host name reported to the router (default CCSLACK_HOST/hostname).")
 def worker(port: int | None, host_name: str | None) -> None:
