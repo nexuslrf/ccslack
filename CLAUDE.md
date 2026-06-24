@@ -28,13 +28,14 @@ src/ccslack/
   tmux_manager.py · screen_buffer.py · …       # I/O
   slack_client.py · slack_formatting.py · slack_sender.py  # Slack transport
   bot.py · bootstrap.py · cli.py · main.py     # lifecycle + entry
-  event_source.py · router.py · router_link.py · link.py · fleet_state.py  # multi-host
+  event_source.py · router.py · router_link.py · link.py · fleet_state.py · ssh_auth.py  # multi-host
   hook.py · hooks/                             # hook subprocess
   handlers/                                    # Slack-side handlers
     auth.py · registry.py
     meta.py · text.py · status.py · screenshot.py · toolbar.py
     interactive.py · new_modal.py · resume.py · history.py
     panes.py · send.py · send_security.py · recovery.py
+    purge.py · table_render.py · ssh_prompt.py  # purge/cleanup · table img · SSH 2FA
     hook_events.py · shell_capture.py · worktree.py
     polling/ · messaging_pipeline/
 

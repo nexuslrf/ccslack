@@ -78,6 +78,7 @@ src/ccslack/
 ├── bot.py                     # AsyncApp factory + event-source lifecycle
 ├── event_source.py            # SocketModeSource / RouterLinkSource + dispatch seam
 ├── router.py, router_link.py, link.py, fleet_state.py   # multi-host (see multi-host.md)
+├── ssh_auth.py                # SSH 2FA prompt bridge (PTY + responder registry)
 ├── bootstrap.py               # post-init wiring
 ├── cli.py, main.py            # Click CLI (run / router / worker)
 ├── utils.py, state_persistence.py, mailbox.py, …
@@ -96,6 +97,9 @@ src/ccslack/
     ├── panes.py               # /ccslack panes inspector
     ├── send.py + send_security.py  # /ccslack send + security filters
     ├── recovery.py            # Dead-window banner
+    ├── ssh_prompt.py          # SSH 2FA prompt toolbar + passcode modal (router)
+    ├── purge.py               # /ccslack purge + autopurge + remove buttons
+    ├── table_render.py        # markdown-table → image offer
     ├── hook_events.py         # Stop / SessionEnd / StopFailure / Notification
     ├── shell_capture.py       # Pre/post pane-diff for shell sessions
     ├── worktree.py            # git worktree plumbing
@@ -257,6 +261,19 @@ identical handler stack. Because only the *inbound* socket is singular (outbound
 Web API works from anywhere), a fleet needs just one intake — the **router** —
 which acks Slack and routes each event to the owning host's worker over an SSH
 tunnel (`router.py`, `router_link.py`, `link.py`). Standalone is unchanged.
+
+Routing is by `channel_id` (or a `--host` directive on a slash command); the
+`Router` keeps a `channel_id → host` registry fed by each worker's
+`hello`/`bind`/`unbind`. The `link` protocol is mostly fire-and-forget, with one
+request/reply (`sessions_req`/`sessions_rep`) so `/ccslack sessions` can merge
+every host's sessions. `fleet_state` is the decoupling layer — the router
+installs itself there and meta handlers (`new --host`, `list`, `fleet`,
+`sessions`) consult it, degrading to "just this host" off the router. Remote
+`new`/`kill` from the meta channel work by forwarding a synthetic slash command
+to the owning worker. Optionally (`CCSLACK_SSH_INTERACTIVE`) a tunnel runs under
+a PTY (`ssh_auth.py`) so an interactive auth prompt (Duo 2FA) is bridged to the
+meta channel and answered from Slack (`handlers/ssh_prompt.py`).
+
 Full design + setup: [multi-host.md](multi-host.md).
 
 ---
