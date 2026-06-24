@@ -80,6 +80,15 @@ def reset_for_testing() -> None:
     _responders.clear()
 
 
+def _make_login_tty(slave_fd: int) -> Callable[[], None]:
+    """preexec_fn: make *slave_fd* the child's controlling terminal."""
+
+    def _pre() -> None:
+        os.login_tty(slave_fd)
+
+    return _pre
+
+
 class PtyProcess:
     """Run a subprocess under a PTY, streaming output and accepting input.
 
@@ -105,12 +114,18 @@ class PtyProcess:
         master_fd, slave_fd = pty.openpty()
         self._master_fd = master_fd
         try:
+            # The slave must be ssh's *controlling* terminal, not merely its
+            # stdio — otherwise ssh can't run interactive (keyboard-interactive /
+            # Duo) auth and exits at once. ``os.login_tty`` in the child does
+            # setsid + TIOCSCTTY + wires the slave to 0/1/2. ``pass_fds`` keeps
+            # the slave open until preexec runs.
             self._proc = await asyncio.create_subprocess_exec(
                 *self._cmd,
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
-                start_new_session=True,  # ssh's controlling tty = the slave
+                preexec_fn=_make_login_tty(slave_fd),  # noqa: PLW1509
+                pass_fds=(slave_fd,),
             )
         finally:
             os.close(slave_fd)  # parent keeps only the master end

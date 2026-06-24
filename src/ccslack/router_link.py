@@ -163,15 +163,22 @@ class SshTunnel:
 
         buf = ""
         last_fired = ""
+        fired_any = False
+        seen = ""  # everything captured, for diagnostics on exit
 
         async def _on_output(chunk: str) -> None:
-            nonlocal buf, last_fired
-            buf = (buf + ssh_auth.strip_ansi(chunk))[-_PTY_BUF_MAX:]
+            nonlocal buf, last_fired, fired_any, seen
+            clean = ssh_auth.strip_ansi(chunk)
+            seen = (seen + clean)[-_PTY_BUF_MAX:]
+            buf = (buf + clean)[-_PTY_BUF_MAX:]
+            logger.debug("ssh[%s] pty: %r", self.host, clean[-200:])
             if (
                 ssh_auth.looks_like_prompt(buf, config.ssh_prompt_re)
                 and buf != last_fired
             ):
                 last_fired = buf
+                fired_any = True
+                logger.info("ssh[%s]: auth prompt detected → posting to Slack", self.host)
                 if self._on_prompt is not None:
                     await self._on_prompt(
                         self.host, buf.strip(), ssh_auth.parse_options(buf)
@@ -188,10 +195,28 @@ class SshTunnel:
         ssh_auth.register_responder(self.host, _respond)
         try:
             await pty.start()
-            await pty.wait()
+            code = await pty.wait()
         finally:
             ssh_auth.unregister_responder(self.host)
             await pty.stop()
+        # Diagnostics: if ssh exited without us ever detecting a prompt, surface
+        # what it printed so the prompt regex can be tuned (or the real error seen).
+        tail = seen.strip()[-600:]
+        if not fired_any and tail:
+            logger.warning(
+                "ssh[%s] exited (code=%s) with no prompt match. "
+                "Captured output (tune CCSLACK_SSH_PROMPT_RE if this is a prompt):\n%s",
+                self.host,
+                code,
+                tail,
+            )
+        elif not fired_any:
+            logger.warning(
+                "ssh[%s] exited (code=%s) producing no PTY output — likely a "
+                "connection/auth failure before any prompt.",
+                self.host,
+                code,
+            )
 
     async def _supervise(self) -> None:
         backoff = _BACKOFF_START
