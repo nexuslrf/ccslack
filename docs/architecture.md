@@ -75,9 +75,11 @@ src/ccslack/
 ├── slack_client.py            # SlackClient Protocol + Bolt adapter + FakeSlackClient
 ├── slack_formatting.py        # mrkdwn ↔ Block Kit
 ├── slack_sender.py            # safe_post / safe_update / split_message
-├── bot.py                     # AsyncApp factory + start_socket_mode
+├── bot.py                     # AsyncApp factory + event-source lifecycle
+├── event_source.py            # SocketModeSource / RouterLinkSource + dispatch seam
+├── router.py, router_link.py, link.py, fleet_state.py   # multi-host (see multi-host.md)
 ├── bootstrap.py               # post-init wiring
-├── cli.py, main.py            # Click CLI
+├── cli.py, main.py            # Click CLI (run / router / worker)
 ├── utils.py, state_persistence.py, mailbox.py, …
 └── handlers/                  # All Slack-side event handlers
     ├── auth.py
@@ -243,6 +245,19 @@ temp-file + atomic rename. Shutdown forces a final flush.
 Window IDs are not stable across tmux server restarts; `session_manager.
 resolve_stale_ids()` runs at startup and re-maps persisted display
 names against live windows.
+
+### 12. Pluggable event source (standalone / router / worker)
+
+Inbound events come from a swappable `EventSource` (`event_source.py`):
+`SocketModeSource` is the standalone connection; a worker uses
+`RouterLinkSource` and the router `RouterSource`. The seam is
+`dispatch_payload(app, payload)` — it feeds a raw Slack event into the Bolt app
+exactly as the Socket Mode adapter does, so a forwarded event runs through the
+identical handler stack. Because only the *inbound* socket is singular (outbound
+Web API works from anywhere), a fleet needs just one intake — the **router** —
+which acks Slack and routes each event to the owning host's worker over an SSH
+tunnel (`router.py`, `router_link.py`, `link.py`). Standalone is unchanged.
+Full design + setup: [multi-host.md](multi-host.md).
 
 ---
 

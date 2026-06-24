@@ -28,6 +28,7 @@ src/ccslack/
   tmux_manager.py · screen_buffer.py · …       # I/O
   slack_client.py · slack_formatting.py · slack_sender.py  # Slack transport
   bot.py · bootstrap.py · cli.py · main.py     # lifecycle + entry
+  event_source.py · router.py · router_link.py · link.py · fleet_state.py  # multi-host
   hook.py · hooks/                             # hook subprocess
   handlers/                                    # Slack-side handlers
     auth.py · registry.py
@@ -72,7 +73,11 @@ uv run ccslack hook --install [--provider codex|gemini|pi]
 - **Block Kit, not MessageEntity.** Use the `slack_formatting` /
   `slack_sender` helpers; handlers depend on the `SlackClient` Protocol
   (`src/ccslack/slack_client.py`), not on `slack_sdk.AsyncWebClient`.
-- **Socket Mode.** No HTTP webhook server, no public endpoint.
+- **Socket Mode.** No HTTP webhook server, no public endpoint. Inbound is a
+  pluggable `EventSource` (`event_source.py`): `SocketModeSource` standalone,
+  `RouterLinkSource` for a worker, `RouterSource` for the router. Multi-host
+  (router forwards events to per-host workers over SSH) is opt-in and leaves
+  standalone unchanged — see `docs/multi-host.md`.
 - **Live picker = JSONL tool_use-driven** (`AskUserQuestion`,
   `ExitPlanMode`, `request_user_input`) with a regex prompt-probe
   fallback for non-hook providers. See `handlers/interactive.py` +

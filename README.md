@@ -39,6 +39,7 @@ the per-feature Telegram → Slack mapping table.
 | 💬 `/ccslack chat` | Start a human-only thread in the channel — replies in it are not forwarded to the agent |
 | 📊 Table render | When an agent answer contains a markdown table, offer a button to render it as a clean image (Slack renders tables poorly) |
 | 👥 Channel-membership auth | Anyone you invite to a session channel can drive that session — no need to add every teammate to `ALLOWED_USERS` |
+| 🌐 Multi-host | Run sessions on several machines from one Slack app + meta channel: a router holds the Slack connection and forwards events to per-host workers over SSH. Opt-in; standalone is unchanged ([docs](docs/multi-host.md)) |
 
 ---
 
@@ -86,6 +87,7 @@ agent's reply streams back.
 - 📋 [`slack-app-manifest.yaml`](slack-app-manifest.yaml) — copy-paste ready manifest for Slack's "From a manifest" flow
 - 🎮 [`docs/commands.md`](docs/commands.md) — every slash command + Block Kit action
 - 🔧 [`docs/configuration.md`](docs/configuration.md) — env vars, state files, per-channel settings
+- 🌐 [`docs/multi-host.md`](docs/multi-host.md) — run sessions across machines (router + workers)
 - 🏗️ [`docs/architecture.md`](docs/architecture.md) — module map + design decisions
 - 🧪 [`docs/development.md`](docs/development.md) — tests, lint, contributing
 
