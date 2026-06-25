@@ -1129,6 +1129,11 @@ class TmuxManager:
         cmd = launch_command
         if agent_args:
             cmd = f"{cmd} {agent_args}"
+        # Bake CCSLACK_DIR into the agent's own process env (inline prefix), not
+        # just the pane shell. This guarantees the agent and its hook
+        # subprocesses resolve *this* instance's config dir even if the prior
+        # `export` was skipped (non-interactive pane) or clobbered.
+        cmd = f"CCSLACK_DIR={shlex.quote(str(config.config_dir))} {cmd}"
         pane.send_keys(cmd, enter=True, literal=True)
 
     async def create_window(
