@@ -1189,6 +1189,16 @@ class TmuxManager:
                         f"export CCSLACK_WINDOW_ID={shlex.quote(qualified_id)}",
                         enter=True,
                     )
+                    # Pin CCSLACK_DIR so the agent's hook subprocess writes its
+                    # session_map/events to *this* process's config dir. tmux
+                    # panes otherwise inherit the server's env (set when the
+                    # server first started), so a worker sharing a box (and a
+                    # tmux server) with a standalone instance would otherwise
+                    # write hooks to the wrong dir and never see the session.
+                    pane.send_keys(
+                        f"export CCSLACK_DIR={shlex.quote(str(config.config_dir))}",
+                        enter=True,
+                    )
                     # Disable interactive editors — Telegram users can't see
                     # tmux popups or terminal overlays opened by plugins
                     pane.send_keys(
