@@ -95,6 +95,13 @@ class Config:
         # can run without it.
         self.slack_app_token: str = os.getenv("SLACK_APP_TOKEN") or ""
 
+        # Optional HTTP/HTTPS proxy for ALL Slack traffic — the Socket Mode
+        # WebSocket and the Web API. Must be an http(s):// URL: the slack-sdk
+        # (aiohttp) stack does NOT support SOCKS, and does NOT read *_PROXY env
+        # vars, so this is the supported way to proxy. For a SOCKS upstream,
+        # front it with a SOCKS→HTTP bridge (or wrap the process in proxychains).
+        self.proxy: str = os.getenv("CCSLACK_PROXY", "").strip()
+
         self.meta_channel_id: str = os.getenv("SLACK_META_CHANNEL_ID") or ""
         if not self.meta_channel_id:
             raise ValueError("SLACK_META_CHANNEL_ID environment variable is required")

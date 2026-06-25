@@ -25,6 +25,7 @@ override env vars where applicable.
 | Variable | Default | Description |
 |---|---|---|
 | `CCSLACK_SLASH_COMMAND` | `/ccslack` | The slash command name ccslack listens for. Set this if `/ccslack` collides with another app in your workspace. Validation: leading `/`, ≤32 chars, `[a-z0-9_-]`. |
+| `CCSLACK_PROXY` | empty | HTTP(S) proxy for **all** Slack traffic — the Socket Mode WebSocket *and* the Web API (posts/uploads), on the router and every worker. Must be an `http(s)://` URL: the slack-sdk (aiohttp) stack **doesn't support SOCKS** and **doesn't read `*_PROXY` env vars**, so this is the supported knob. For a SOCKS upstream, front it with a SOCKS→HTTP bridge, or run the process under `proxychains`. (Agent CLIs in tmux inherit your shell env separately.) |
 | `CCSLACK_CHANNEL_PREFIX` | `ccslack` | Prefix for auto-created channel names: `<prefix>-<cwd-slug>`. Sanitized to Slack-legal characters. Set to empty to use just the cwd slug (e.g. `vrender` instead of `ccslack-vrender`). |
 | `CCSLACK_TABLE_RENDER` | `true` | When an agent answer contains a markdown table, post a button offering to render it as an image (Slack renders markdown tables poorly). The raw text is always posted; set `false` to suppress the button. |
 | `CCSLACK_JOIN_OFFER` | `true` | After `/ccslack new` creates a session, post a notice in the meta channel with a **Join** button so the other `ALLOWED_USERS` can opt into the new private channel. Set `false` to skip it. |

@@ -45,14 +45,26 @@ async def _global_error_handler(
 
 def create_app() -> AsyncApp:
     """Build the Bolt ``AsyncApp`` for ccslack."""
-    app = AsyncApp(
-        token=config.slack_bot_token,
-        # Process events sequentially in the order Slack delivers them. This is
-        # important for message ordering inside a channel; concurrency comes
-        # from the per-channel send queue (handlers/messaging_pipeline).
-        process_before_response=False,
-        raise_error_for_unhandled_request=False,
-    )
+    # Process events sequentially in the order Slack delivers them — important
+    # for message ordering inside a channel; concurrency comes from the
+    # per-channel send queue (handlers/messaging_pipeline).
+    kwargs: dict = {
+        "process_before_response": False,
+        "raise_error_for_unhandled_request": False,
+    }
+    # CCSLACK_PROXY routes all outbound Web API through an HTTP(S) proxy. Pass a
+    # pre-built web client (token+proxy) so every post / upload (router and
+    # workers) honours it; the Socket Mode handlers get the same proxy at
+    # connect time. token and client are mutually exclusive (Bolt warns).
+    if config.proxy:
+        from slack_sdk.web.async_client import AsyncWebClient
+
+        kwargs["client"] = AsyncWebClient(
+            token=config.slack_bot_token, proxy=config.proxy
+        )
+    else:
+        kwargs["token"] = config.slack_bot_token
+    app = AsyncApp(**kwargs)
     app.error(_global_error_handler)
     register_all(app)
     return app

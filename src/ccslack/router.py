@@ -197,7 +197,7 @@ class _RoutingHandler(AsyncSocketModeHandler):
     """Socket Mode handler that acks, then dispatches locally or forwards."""
 
     def __init__(self, app: AsyncApp, router: Router, app_token: str) -> None:
-        super().__init__(app, app_token)
+        super().__init__(app, app_token, proxy=config.proxy or None)
         self._router = router
 
     async def handle(  # type: ignore[override]

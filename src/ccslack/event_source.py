@@ -83,7 +83,9 @@ class SocketModeSource(EventSource):
         # Lazy: pulls the aiohttp websocket stack only when actually connecting.
         from slack_bolt.adapter.socket_mode.aiohttp import AsyncSocketModeHandler
 
-        handler = AsyncSocketModeHandler(self._app, config.slack_app_token)
+        handler = AsyncSocketModeHandler(
+            self._app, config.slack_app_token, proxy=config.proxy or None
+        )
         self._handler = handler
         await handler.connect_async()
         logger.info("Socket Mode connected; ccslack ready")
