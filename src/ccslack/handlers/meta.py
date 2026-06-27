@@ -50,6 +50,17 @@ _USER_MENTION_RE = re.compile(r"^<@([UW][A-Z0-9]+)(?:\|[^>]*)?>$")
 _BARE_USER_RE = re.compile(r"^[UW][A-Z0-9]{6,}$")
 
 
+def _meta_surface_hint() -> str:
+    """Human-readable description of where meta commands work, mode-aware."""
+    meta = f"the meta channel (<#{config.meta_channel_id}>)"
+    dm = "the app's DM"
+    if config.meta_surface == "dm":
+        return dm
+    if config.meta_surface == "hybrid":
+        return f"{meta} or {dm}"
+    return meta
+
+
 def _parse_user_ids(args: list[str]) -> list[str]:
     """Extract Slack user ids from slash-command args (mentions or bare ids)."""
     ids: list[str] = []
@@ -237,14 +248,15 @@ def register(app: AsyncApp) -> None:
             "-h",
             "--help",
         )
-        if meta_only and channel_id != config.meta_channel_id:
+        from .auth import is_meta_surface
+
+        if meta_only and not is_meta_surface(channel_id):
             await _post_ephemeral(
                 client.chat_postEphemeral,
                 channel=channel_id,
                 user=user_id,
                 text=(
-                    f"ccslack: `{slash} {sub}` only works in the meta channel "
-                    f"(<#{config.meta_channel_id}>)."
+                    f"ccslack: `{slash} {sub}` only works in {_meta_surface_hint()}."
                 ),
             )
             return
@@ -1660,15 +1672,17 @@ async def _handle_kill(
     """Implements ``/ccslack kill [target | --all --confirm]``."""
     slash = config.slash_command
 
+    from .auth import is_meta_surface
+
     if args and args[0] == "--all":
-        if channel_id != config.meta_channel_id:
+        if not is_meta_surface(channel_id):
             await _post_ephemeral(
                 client.chat_postEphemeral,
                 channel=channel_id,
                 user=user_id,
                 text=(
-                    f"ccslack: `{slash} kill --all` only works in the meta "
-                    f"channel (<#{config.meta_channel_id}>)."
+                    f"ccslack: `{slash} kill --all` only works in "
+                    f"{_meta_surface_hint()}."
                 ),
             )
             return
@@ -1703,13 +1717,13 @@ async def _handle_kill(
         return
 
     target_arg = args[0] if args else ""
-    if not target_arg and channel_id == config.meta_channel_id:
+    if not target_arg and is_meta_surface(channel_id):
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
             user=user_id,
             text=(
-                f"ccslack: from the meta channel, specify a target — "
+                f"ccslack: from {_meta_surface_hint()}, specify a target — "
                 f"`{slash} kill <#channel>` or `{slash} kill @window`."
             ),
         )

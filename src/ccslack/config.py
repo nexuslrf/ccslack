@@ -62,6 +62,17 @@ def _resolve_slash_command(env_value: str) -> str:
     return "/" + body.lower()
 
 
+def _resolve_meta_surface() -> str:
+    """Validate ``CCSLACK_META_SURFACE`` (channel | hybrid | dm); default channel."""
+    surface = (os.getenv("CCSLACK_META_SURFACE") or "channel").strip().lower()
+    if surface not in ("channel", "hybrid", "dm"):
+        logger.warning(
+            "Invalid CCSLACK_META_SURFACE=%r; falling back to 'channel'", surface
+        )
+        return "channel"
+    return surface
+
+
 def _resolve_toolbar_path() -> str:
     """Resolve the toolbar TOML config path."""
     env = os.getenv("CCSLACK_TOOLBAR_CONFIG", "").strip()
@@ -105,6 +116,13 @@ class Config:
         self.meta_channel_id: str = os.getenv("SLACK_META_CHANNEL_ID") or ""
         if not self.meta_channel_id:
             raise ValueError("SLACK_META_CHANNEL_ID environment variable is required")
+
+        # Where session management lives. ``channel`` (default) = the meta
+        # channel only, unchanged behaviour. ``hybrid`` = meta channel *and*
+        # the bot's DM both accept management commands. ``dm`` = the bot's DM
+        # only. Proactive notifications (join offers, SSH prompts) still post
+        # to the meta channel for now; only commands/buttons honour this mode.
+        self.meta_surface: str = _resolve_meta_surface()
 
         allowed_users_str = os.getenv("ALLOWED_USERS", "")
         if not allowed_users_str:

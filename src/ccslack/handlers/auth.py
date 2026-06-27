@@ -48,6 +48,35 @@ def is_authorized(user_id: str, channel_id: str) -> bool:
     return thread_router.is_user_granted(channel_id, user_id)
 
 
+def is_dm_channel(channel_id: str) -> bool:
+    """True iff ``channel_id`` is a Slack direct-message channel.
+
+    DM (``im``) conversation IDs start with ``D``. Slash-command bodies and
+    message events both carry this ID, so a prefix check is enough — we never
+    need an API round-trip to classify the surface.
+    """
+    return channel_id.startswith("D")
+
+
+def is_meta_surface(channel_id: str) -> bool:
+    """True iff ``channel_id`` is a valid *management* surface for the
+    configured :data:`config.meta_surface` mode.
+
+      * ``channel`` (default): the meta channel only.
+      * ``hybrid``: the meta channel *or* the bot's DM.
+      * ``dm``: the bot's DM only.
+
+    This gates the *meta-only* slash subcommands and dashboard actions; it is
+    orthogonal to :func:`is_meta_authorized`, which gates *who* may use them.
+    """
+    if not channel_id:
+        return False
+    mode = config.meta_surface
+    if mode in ("channel", "hybrid") and channel_id == config.meta_channel_id:
+        return True
+    return mode in ("dm", "hybrid") and is_dm_channel(channel_id)
+
+
 def is_meta_authorized(user_id: str) -> bool:
     """Stricter check used for slash-command paths that *only* exist in the
     meta channel (``/ccslack new``, ``/ccslack list``, ``/ccslack sessions``).
@@ -58,4 +87,9 @@ def is_meta_authorized(user_id: str) -> bool:
     return bool(user_id) and config.is_user_allowed(user_id)
 
 
-__all__ = ["is_authorized", "is_meta_authorized"]
+__all__ = [
+    "is_authorized",
+    "is_dm_channel",
+    "is_meta_authorized",
+    "is_meta_surface",
+]

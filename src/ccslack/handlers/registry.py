@@ -15,8 +15,6 @@ from __future__ import annotations
 import structlog
 from typing import TYPE_CHECKING
 
-from ..config import config
-
 if TYPE_CHECKING:
     from slack_bolt.async_app import AsyncApp
 
@@ -62,17 +60,19 @@ def _register_health_handlers(app: AsyncApp) -> None:
     async def on_app_mention(event: dict, say) -> None:  # noqa: ANN001
         """Respond to @ccslack in the meta channel with a status ping."""
         # Lazy: keep the import here so the registry stays a thin top-level wire.
-        from .auth import is_authorized
+        from .auth import is_authorized, is_meta_surface
 
         channel = event.get("channel", "")
         user = event.get("user", "")
         if not is_authorized(user, channel):
             logger.info("Ignoring app_mention from unauthorized user %s", user)
             return
-        if channel != config.meta_channel_id:
+        if not is_meta_surface(channel):
+            from .meta import _meta_surface_hint
+
             await say(
                 channel=channel,
-                text=":wave: I'm here — use the meta channel for `/ccslack` commands.",
+                text=f":wave: I'm here — use {_meta_surface_hint()} for `/ccslack` commands.",
             )
             return
         await say(channel=channel, text=":green_heart: ccslack online")

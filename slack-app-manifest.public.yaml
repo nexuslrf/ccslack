@@ -26,6 +26,13 @@ features:
   bot_user:
     display_name: ccslack
     always_online: true
+  # Allow session management from the bot's DM (CCSLACK_META_SURFACE=hybrid|dm).
+  # The Messages tab must permit slash commands so `/ccslack …` works in the DM;
+  # commands-only DM management needs no im:* scopes (chat:write covers replies).
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
   slash_commands:
     - command: /ccslack
       description: Manage ccslack sessions

@@ -1,6 +1,11 @@
 import pytest
 
-from ccslack.handlers.auth import is_authorized, is_meta_authorized
+from ccslack.handlers.auth import (
+    is_authorized,
+    is_dm_channel,
+    is_meta_authorized,
+    is_meta_surface,
+)
 from ccslack.thread_router import ThreadRouter, install_thread_router
 
 
@@ -62,3 +67,39 @@ def test_is_meta_authorized_never_trusts_channel(bound_router, monkeypatch):
     assert is_meta_authorized("U0OUTSIDER") is False
     assert is_meta_authorized("U0ALLOWED") is True
     assert is_meta_authorized("") is False
+
+
+def test_is_dm_channel_prefix():
+    assert is_dm_channel("D0123ABC") is True
+    assert is_dm_channel("C0METATEST") is False
+    assert is_dm_channel("") is False
+
+
+def test_meta_surface_channel_mode(monkeypatch):
+    from ccslack.config import config as _cfg
+
+    monkeypatch.setattr(_cfg, "meta_channel_id", "C0METATEST")
+    monkeypatch.setattr(_cfg, "meta_surface", "channel")
+    assert is_meta_surface("C0METATEST") is True
+    assert is_meta_surface("D0DM") is False
+    assert is_meta_surface("C0OTHER") is False
+    assert is_meta_surface("") is False
+
+
+def test_meta_surface_hybrid_mode(monkeypatch):
+    from ccslack.config import config as _cfg
+
+    monkeypatch.setattr(_cfg, "meta_channel_id", "C0METATEST")
+    monkeypatch.setattr(_cfg, "meta_surface", "hybrid")
+    assert is_meta_surface("C0METATEST") is True
+    assert is_meta_surface("D0DM") is True
+    assert is_meta_surface("C0OTHER") is False
+
+
+def test_meta_surface_dm_mode_excludes_meta_channel(monkeypatch):
+    from ccslack.config import config as _cfg
+
+    monkeypatch.setattr(_cfg, "meta_channel_id", "C0METATEST")
+    monkeypatch.setattr(_cfg, "meta_surface", "dm")
+    assert is_meta_surface("D0DM") is True
+    assert is_meta_surface("C0METATEST") is False
