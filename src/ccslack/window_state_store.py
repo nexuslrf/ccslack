@@ -33,7 +33,13 @@ YOLO_APPROVAL_MODE = "yolo"
 BATCH_MODES: frozenset[str] = frozenset({"batched", "verbose"})
 DEFAULT_BATCH_MODE = "batched"
 
-NOTIFICATION_MODES: tuple[str, ...] = ("all", "errors_only", "muted")
+# all         → every transcript message posts
+# errors_only → only error-like text + tool flows
+# muted       → text suppressed; tool flows still post (agent keeps progressing)
+# silent      → nothing from tmux posts (not even tool flows or the live
+#               picker); only the status pill updates. Monitor via /toolbar +
+#               /screenshot. Input still forwards INTO the session.
+NOTIFICATION_MODES: tuple[str, ...] = ("all", "errors_only", "muted", "silent")
 
 TOOL_CALL_VISIBILITY_MODES: tuple[str, ...] = ("default", "shown", "hidden")
 DEFAULT_TOOL_CALL_VISIBILITY: str = "default"
@@ -122,7 +128,7 @@ class WindowState:
         cwd: Working directory for direct file path construction
         window_name: Display name of the window
         transcript_path: Direct path to JSONL transcript file (from hook payload)
-        notification_mode: "all" | "errors_only" | "muted"
+        notification_mode: "all" | "errors_only" | "muted" | "silent"
         provider_name: Name of the agent provider for this window
         approval_mode: "normal" | "yolo"
         batch_mode: "batched" | "verbose"
@@ -530,7 +536,7 @@ class WindowStateStore:
             self._schedule_save()
 
     def cycle_notification_mode(self, window_id: str) -> str:
-        """Cycle notification mode: all → errors_only → muted → all. Returns new mode."""
+        """Cycle notify mode: all → errors_only → muted → silent → all. Returns new mode."""
         current = self.get_notification_mode(window_id)
         modes = self._NOTIFICATION_MODES
         idx = modes.index(current) if current in modes else 0

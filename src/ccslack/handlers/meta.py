@@ -429,8 +429,8 @@ def _help_text() -> str:
         "(meta channel only).\n"
         f"• `{slash} kill --all --confirm` — kill every session "
         "(meta channel only).\n"
-        f"• `{slash} mute [all|errors|off]` — change/cycle notify mode for "
-        "the current channel.\n"
+        f"• `{slash} mute [all|errors|off|silent]` — change/cycle notify mode "
+        "for the current channel (`silent` = nothing posts back).\n"
         f"• `{slash} chat [topic]` — start a human-only thread; replies in it "
         "are not sent to the agent.\n"
         f"• `{slash} here <dir> [provider]` — bind THIS channel to a fresh "
@@ -1018,6 +1018,11 @@ _MUTE_ALIASES = {
     "off": "muted",
     "muted": "muted",
     "mute": "muted",
+    "silent": "silent",
+    "silence": "silent",
+    "quiet": "silent",
+    "none": "silent",
+    "deaf": "silent",
 }
 
 
@@ -1547,7 +1552,7 @@ async def _handle_mute(
     user_id: str,
     args: list[str],
 ) -> None:
-    """``/ccslack mute [all|errors|off]`` — set or cycle notify mode for this channel."""
+    """``/ccslack mute [all|errors|off|silent]`` — set or cycle notify mode."""
     window_id = thread_router.get_window_for_channel(channel_id)
     if window_id is None:
         await _post_ephemeral(
@@ -1567,7 +1572,8 @@ async def _handle_mute(
                 channel=channel_id,
                 user=user_id,
                 text=(
-                    f"ccslack: unknown mode `{alias}` — pick `all`, `errors`, or `off`."
+                    f"ccslack: unknown mode `{alias}` — pick `all`, `errors`, "
+                    "`off`, or `silent`."
                 ),
             )
             return
@@ -1579,6 +1585,10 @@ async def _handle_mute(
         "all": ":speaker: *all* — every transcript message posts here",
         "errors_only": ":warning: *errors only* — only error-like text + tool flows",
         "muted": ":mute: *muted* — text suppressed; tool flows still post",
+        "silent": (
+            ":no_bell: *silent* — nothing posts back; input still runs. "
+            "Monitor via `/toolbar` + `/screenshot`"
+        ),
     }
     await _post_ephemeral(
         client.chat_postEphemeral,

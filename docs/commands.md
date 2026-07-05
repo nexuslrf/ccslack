@@ -243,17 +243,19 @@ deny-by-default):
 - **Tunables**: `CCSLACK_SEND_SEARCH_DEPTH` (5), `CCSLACK_SEND_MAX_RESULTS`
   (50) — see [configuration](configuration.md).
 
-### `/ccslack mute [all|errors|off]`
+### `/ccslack mute [all|errors|off|silent]`
 
-Per-channel notification mode.
+Per-channel notification mode. Controls what the session posts *back* to Slack;
+your input always still forwards **into** the tmux session.
 
 | Mode | Effect |
 |---|---|
 | `all` (default) | Every transcript message posts |
 | `errors` (alias `errors_only`) | Only error-like content + tool flows post |
 | `off` (alias `muted`) | Plain text suppressed; tool flows still post so the agent can progress |
+| `silent` (aliases `quiet` `none` `deaf`) | **Nothing** posts back — not text, tool flows, or the live picker; only the status pill updates. Send commands in, watch execution via [`/toolbar`](#-toolbar) + [`/screenshot`](#-screenshot). |
 
-No arg cycles through the three modes.
+No arg cycles through the four modes (`all → errors → off → silent → all`).
 
 - **Where**: a bound session channel.
 - **Auth**: channel membership.

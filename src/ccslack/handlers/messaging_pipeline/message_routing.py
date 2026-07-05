@@ -51,6 +51,10 @@ def _should_skip_for_mode(
     msg: NewMessage,
 ) -> bool:
     """True when ``notification_mode`` says this message should be suppressed."""
+    if notification_mode == "silent":
+        # Silent suppresses everything from tmux — even tool flows. The channel
+        # only gets status-pill updates; drive/monitor via /toolbar + /screenshot.
+        return True
     if notification_mode == "muted":
         # Don't drop tool flows in muted mode — agents stop progressing without
         # explicit acknowledgement.
@@ -102,6 +106,79 @@ async def handle_new_message(msg: NewMessage, client: SlackClient) -> None:
         await _route_to_channel(client, channel_id, window_id, msg, text)
 
 
+async def _pre_post_suppressed(
+    client: SlackClient,
+    channel_id: str,
+    window_id: str,
+    msg: NewMessage,
+    text: str,
+) -> bool:
+    """Return True when *msg* must not get a normal channel post.
+
+    Consolidates every pre-post gate — each also refreshes the status pill:
+
+      * **silent** mode — suppress *everything* from tmux, including the live
+        picker; the channel only shows the status pill (monitor via
+        ``/toolbar`` + ``/screenshot``).
+      * interactive **live picker** — a ``tool_use`` for an interactive tool
+        drives the picker instead of a plain post.
+      * picker **close** — a ``tool_result`` that resolves an open picker.
+      * per-window **tool-call visibility** (``/ccslack toolcalls``).
+      * **notification mode** (``/ccslack mute`` — all/errors_only/muted).
+    """
+    # Lazy: interactive pulls picker machinery; keep it off the hot import path.
+    from ..interactive import (
+        INTERACTIVE_TOOL_NAMES,
+        enter_interactive_mode,
+        maybe_exit_for_tool_result,
+    )
+    from ..status import update_status
+
+    notification_mode = window_query.get_notification_mode(window_id)
+
+    if notification_mode == "silent":
+        await update_status(client, channel_id, window_id, "active")
+        return True
+
+    if msg.content_type == "tool_use" and (msg.tool_name or "") in INTERACTIVE_TOOL_NAMES:
+        await enter_interactive_mode(
+            client,
+            channel_id=channel_id,
+            window_id=window_id,
+            tool_use_id=msg.tool_use_id,
+            tool_name=msg.tool_name or "",
+        )
+        await update_status(client, channel_id, window_id, "active")
+        return True
+
+    if (
+        msg.content_type == "tool_result"
+        and msg.tool_use_id
+        and await maybe_exit_for_tool_result(client, msg.tool_use_id)
+    ):
+        await update_status(client, channel_id, window_id, "active")
+        return True
+
+    if msg.content_type in (
+        "tool_use",
+        "tool_result",
+    ) and window_query.is_tool_calls_hidden(window_id):
+        logger.debug("Tool calls hidden for window %s; skipping", window_id)
+        await update_status(client, channel_id, window_id, "active")
+        return True
+
+    if _should_skip_for_mode(notification_mode, text, msg):
+        logger.debug(
+            "Suppressing message for window %s (mode=%s)",
+            window_id,
+            notification_mode,
+        )
+        await update_status(client, channel_id, window_id, "active")
+        return True
+
+    return False
+
+
 async def _route_to_channel(
     client: SlackClient,
     channel_id: str,
@@ -111,11 +188,6 @@ async def _route_to_channel(
 ) -> None:
     """Deliver one message to one bound channel, applying all routing policy."""
     # Lazy: status / polling modules pull session_manager + slack helpers.
-    from ..interactive import (
-        INTERACTIVE_TOOL_NAMES,
-        enter_interactive_mode,
-        maybe_exit_for_tool_result,
-    )
     from ..polling.coordinator import mark_active
     from ..status import update_status
     from . import turn_threads
@@ -131,50 +203,10 @@ async def _route_to_channel(
 
         purge.bump_round(channel_id)
 
-    # tool_use of an interactive tool name → enter the live picker. Skip the
-    # normal post; the picker carries the pane content live.
-    if (
-        msg.content_type == "tool_use"
-        and (msg.tool_name or "") in INTERACTIVE_TOOL_NAMES
-    ):
-        await enter_interactive_mode(
-            client,
-            channel_id=channel_id,
-            window_id=window_id,
-            tool_use_id=msg.tool_use_id,
-            tool_name=msg.tool_name or "",
-        )
-        await update_status(client, channel_id, window_id, "active")
-        return
-
-    # tool_result paired with an active interactive picker → close picker and
-    # skip the normal post (the picker now shows the final state).
-    if (
-        msg.content_type == "tool_result"
-        and msg.tool_use_id
-        and await maybe_exit_for_tool_result(client, msg.tool_use_id)
-    ):
-        await update_status(client, channel_id, window_id, "active")
-        return
-
-    # Per-window tool-call visibility — each channel can mute/show its tool
-    # chain via ``/ccslack toolcalls``.
-    if msg.content_type in (
-        "tool_use",
-        "tool_result",
-    ) and window_query.is_tool_calls_hidden(window_id):
-        logger.debug("Tool calls hidden for window %s; skipping", window_id)
-        await update_status(client, channel_id, window_id, "active")
-        return
-
-    notification_mode = window_query.get_notification_mode(window_id)
-    if _should_skip_for_mode(notification_mode, text, msg):
-        logger.debug(
-            "Suppressing message for window %s (mode=%s)",
-            window_id,
-            notification_mode,
-        )
-        await update_status(client, channel_id, window_id, "active")
+    # Everything that decides "don't post this normally" (silent mode, the live
+    # picker, tool-call visibility, notification modes) lives in one gate so the
+    # post path below stays linear.
+    if await _pre_post_suppressed(client, channel_id, window_id, msg, text):
         return
 
     # Tool-call threading: route tool_use / tool_result / thinking under a
