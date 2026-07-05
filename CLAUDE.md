@@ -151,6 +151,16 @@ hints. Each provider's hook payload is normalised by
 Launch overrides: `CCSLACK_<NAME>_COMMAND` (e.g.
 `CCSLACK_CLAUDE_COMMAND=ce`).
 
+**Cursor** (`cursor-agent`) is the odd one out: no hooks, and its chat store
+is a content-addressed SQLite blob DB (`~/.cursor/chats/<md5(cwd)>/<agentId>/
+store.db`), not JSONL. So it sets `supports_hookless_discovery=True` and
+`supports_incremental_read=False`: the monitor loop polls
+`discover_transcript()` to map a window → its `store.db` and writes a synthetic
+`session_map.json` entry (`register_hookless_session` +
+`write_hookless_session_map`), then `read_transcript_file()` tails the `blobs`
+table by `rowid` (the monitor "offset" is the last rowid). See
+`providers/cursor.py`.
+
 Hook install paths:
 
 - Claude: `~/.claude/settings.json` (managed by ccslack)
@@ -159,6 +169,7 @@ Hook install paths:
   deprecated `codex_hooks` flag)
 - Gemini: `~/.gemini/settings.json` (managed by ccslack)
 - Pi: cc-thingz hook-runner (not managed by ccslack)
+- Cursor: no hooks — sessions found via hookless discovery (see Providers)
 
 ---
 

@@ -21,7 +21,7 @@ Create a new session.
 |---|---|
 | `/ccslack new` | Opens a Block Kit modal — directory text input, provider radio, "create fresh git worktree" + "YOLO" checkboxes + optional branch name |
 | `/ccslack new <dir>` | Default provider in `<dir>` |
-| `/ccslack new <dir> <provider>` | `provider` ∈ `claude` `codex` `gemini` `pi` `shell` |
+| `/ccslack new <dir> <provider>` | `provider` ∈ `claude` `codex` `gemini` `pi` `shell` `cursor` |
 | `/ccslack new <dir> claude --worktree` | Spawns a fresh `git worktree` (auto-named `ccg/<slug>`) and uses *that* path as the session cwd |
 | `/ccslack new <dir> claude --worktree feature-x` | Same but with a named branch |
 | `/ccslack new <dir> codex --yolo` | Launches the agent with approvals/sandbox **skipped** — see YOLO below |
@@ -44,6 +44,7 @@ its skip-approvals flag so it edits files and runs commands without asking:
 | `claude` | `--dangerously-skip-permissions` |
 | `codex` | `--dangerously-bypass-approvals-and-sandbox` |
 | `gemini` | `--yolo` |
+| `cursor` | `--force` |
 
 It's a no-op for `pi` / `shell` (no such mode) — the request is ignored with
 an ephemeral warning. YOLO sessions are flagged with a :warning: in the
@@ -306,8 +307,8 @@ Posts a confirm message; on click it Ctrl-C's the agent until the pane is
 back at a shell, then relaunches it with the target mode's launch flags plus
 `--continue` (so the conversation resumes). If the agent ignores repeated
 Ctrl-C the switch is aborted with a hint to `kill` + `restore`. Switching
-*to* YOLO needs a YOLO-capable provider (claude/codex/gemini); switching to
-normal works for any provider.
+*to* YOLO needs a YOLO-capable provider (claude/codex/gemini/cursor); switching
+to normal works for any provider.
 
 - **Where**: a bound session channel.
 - **Auth**: channel membership.

@@ -62,12 +62,22 @@ events instead of opening Socket Mode, so it runs without it.
 
 | Variable | Default | Description |
 |---|---|---|
-| `CCSLACK_PROVIDER` | `claude` | Default provider for `/ccslack new` when no provider is specified. One of `claude` `codex` `gemini` `pi` `shell`. |
+| `CCSLACK_PROVIDER` | `claude` | Default provider for `/ccslack new` when no provider is specified. One of `claude` `codex` `gemini` `pi` `shell` `cursor`. |
 | `CCSLACK_RESTORE_ON_START` | `banner` | What to do at startup for bound channels whose tmux window died (reboot / tmux restart). `banner` posts the manual Fresh/Continue/Resume/Archive recovery banner; `continue` auto-respawns and continues the latest session; `resume` auto-respawns with the remembered session id (falls back to continue); `off` does nothing (polling still posts the banner later). |
 | `CCSLACK_CLAUDE_COMMAND` | `claude` | Override the launch command. Useful for wrappers like `ce`, `cc-mirror`, `zai`. |
 | `CCSLACK_CODEX_COMMAND` | `codex` | … |
 | `CCSLACK_GEMINI_COMMAND` | `gemini` | … |
+| `CCSLACK_CURSOR_COMMAND` | `cursor-agent` | Override the [Cursor Agent CLI](https://cursor.com/docs/cli/overview) launch command. |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Used when you wrap Claude with a different config directory. Affects hook install, command discovery, session monitoring. |
+
+> **Cursor provider notes.** `cursor-agent` must be logged in
+> (`cursor-agent login`, subscription) — the interactive session ccslack drives
+> uses that login, no `CURSOR_API_KEY` needed. Cursor has **no hooks**: ccslack
+> discovers a session by scanning its SQLite chat store
+> (`~/.cursor/chats/<md5(cwd)>/<agentId>/store.db`) and tails it for replies, so
+> there is **no `ccslack hook --install` step** for Cursor. Cursor's in-TUI
+> permission prompts aren't parsed yet, so for unattended use launch with YOLO
+> (`--force`, via the `new` modal's YOLO checkbox or `/ccslack yolo`).
 
 ### Polling + monitor cadence
 

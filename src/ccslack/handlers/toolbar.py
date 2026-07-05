@@ -105,6 +105,8 @@ _CODEX_LAYOUT: _Layout = [
 
 _GEMINI_LAYOUT: _Layout = _CODEX_LAYOUT
 _PI_LAYOUT: _Layout = _CLAUDE_LAYOUT
+# cursor-agent is a full-screen TUI driven by arrow keys / Enter / Esc.
+_CURSOR_LAYOUT: _Layout = _CLAUDE_LAYOUT
 
 _SHELL_LAYOUT: _Layout = [
     [
@@ -128,6 +130,7 @@ _LAYOUTS: dict[str, _Layout] = {
     "gemini": _GEMINI_LAYOUT,
     "pi": _PI_LAYOUT,
     "shell": _SHELL_LAYOUT,
+    "cursor": _CURSOR_LAYOUT,
 }
 
 

@@ -117,6 +117,11 @@ class ProviderCapabilities:
     supports_continue: bool = False
     supports_structured_transcript: bool = False
     supports_incremental_read: bool = True  # False → whole-file JSON (e.g. Gemini)
+    # True for hookless providers that ccslack must actively discover by
+    # scanning the provider's on-disk session store (no ccslack-managed hook
+    # writes session_map.json). The monitor loop polls discover_transcript()
+    # for such windows and registers the result. Currently only Cursor.
+    supports_hookless_discovery: bool = False
     transcript_format: Literal["jsonl", "plain"] = "jsonl"
     uses_pane_title: bool = False  # Provider reads OSC pane title for status
     # True only for providers whose terminal chrome matches Claude Code's

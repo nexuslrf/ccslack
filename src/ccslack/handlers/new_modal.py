@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-_PROVIDERS = ("claude", "codex", "gemini", "pi", "shell")
+_PROVIDERS = ("claude", "codex", "gemini", "pi", "shell", "cursor")
 
 
 def _provider_option(name: str) -> dict[str, Any]:
@@ -133,7 +133,7 @@ def build_new_session_view(
                         {
                             "text": {
                                 "type": "plain_text",
-                                "text": "YOLO — skip approvals (claude/codex/gemini)",
+                                "text": "YOLO — skip approvals (claude/codex/gemini/cursor)",
                             },
                             "value": "yolo",
                         },

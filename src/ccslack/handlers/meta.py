@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
-_SUPPORTED_PROVIDERS = ("claude", "codex", "gemini", "pi", "shell")
+_SUPPORTED_PROVIDERS = ("claude", "codex", "gemini", "pi", "shell", "cursor")
 _CHANNEL_NAME_SAFE = re.compile(r"[^a-z0-9-]+")
 
 # Slack user references in slash-command text: ``<@U123|name>`` / ``<@U123>``

@@ -320,6 +320,71 @@ class SessionMonitor:
 
         return result.current_map
 
+    async def _discover_hookless_sessions(
+        self, all_windows: list[Any], known_window_ids: set[str]
+    ) -> None:
+        """Discover sessions for hookless providers (Cursor) and register them.
+
+        Providers with ``supports_hookless_discovery`` write no session_map
+        entry via a hook, so their windows never get monitored on their own.
+        For each bound, still-unresolved window of such a provider, scan the
+        provider's on-disk store (``discover_transcript``) and, on a hit, write
+        a synthetic session_map entry so the next loop iteration tracks it like
+        any hookful session.
+        """
+        # Lazy: shared-state import cycle (session_map ↔ session_monitor).
+        from .session_map import session_map_sync
+        from .thread_router import thread_router
+        from .window_state_store import window_store
+
+        for window in all_windows:
+            window_id = window.window_id
+            if window_id in known_window_ids:
+                continue  # already has a session_map entry
+            if not thread_router.has_window(window_id):
+                continue  # only windows ccslack bound to a channel
+            state = window_store.window_states.get(window_id)
+            if state and state.session_id:
+                continue  # already discovered on a previous pass
+            provider = get_provider_for_window(
+                window_id, provider_name=state.provider_name if state else None
+            )
+            caps = provider.capabilities
+            if not caps.supports_hookless_discovery:
+                continue
+            event = await asyncio.to_thread(
+                provider.discover_transcript, window.cwd, window_id
+            )
+            if event is None:
+                continue
+            session_map_sync.register_hookless_session(
+                window_id,
+                event.session_id,
+                event.cwd,
+                event.transcript_path,
+                caps.name,
+            )
+            try:
+                await asyncio.to_thread(
+                    session_map_sync.write_hookless_session_map,
+                    window_id,
+                    event.session_id,
+                    event.cwd,
+                    event.transcript_path,
+                    caps.name,
+                )
+            except OSError:
+                logger.exception(
+                    "Failed to write hookless session_map for %s", window_id
+                )
+                continue
+            logger.info(
+                "Discovered %s session %s for window %s",
+                caps.name,
+                event.session_id,
+                window_id,
+            )
+
     async def _monitor_loop(self) -> None:
         """Background poll loop."""
         logger.info("Session monitor started, polling every %ss", self.poll_interval)
@@ -347,6 +412,7 @@ class SessionMonitor:
                 live_window_ids = {w.window_id for w in all_windows}
                 session_map_sync.prune_session_map(live_window_ids)
                 known_window_ids = set(current_map.keys())
+                await self._discover_hookless_sessions(all_windows, known_window_ids)
                 for window in all_windows:
                     if window.window_id in known_window_ids:
                         continue
