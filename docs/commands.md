@@ -312,6 +312,27 @@ Ctrl-C the switch is aborted with a hint to `kill` + `restore`. Switching
 *to* YOLO needs a YOLO-capable provider (claude/codex/gemini/cursor); switching
 to normal works for any provider.
 
+### `/ccslack relaunch [--fresh] [args…]`
+
+Restart the **running** agent with *arbitrary* custom CLI args — the flexible
+cousin of `yolo` (which only toggles the fixed skip-approvals flag). Everything
+after `relaunch` is passed straight to the agent's launch command.
+
+| Form | Result (provider `claude`) |
+|---|---|
+| `/ccslack relaunch --model opus` | `claude --continue --model opus` |
+| `/ccslack relaunch --fresh --model opus` | `claude --model opus` (new session) |
+| `/ccslack relaunch --append-system-prompt "be terse"` | `claude --continue --append-system-prompt 'be terse'` |
+
+Same mechanics as `yolo`: posts a confirm with the exact command, then on click
+Ctrl-C's the agent back to a shell and relaunches it. The session **continues**
+by default (`--fresh` starts clean). Custom args are `shlex`-quoted, so
+multi-word values survive and shell metacharacters become literal arguments to
+the agent (never the shell). Works for any provider.
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
 - **Where**: a bound session channel.
 - **Auth**: channel membership.
 
@@ -603,7 +624,7 @@ it.
 | Dashboard 🗑️ Kill button | `ALLOWED_USERS` |
 | `/ccslack kill --all`, kill by `<#channel>` / `C…` / `@N` | `ALLOWED_USERS` |
 | `/ccslack kill` (from session channel) | Channel membership |
-| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `yolo`, `chat`, `users`, `purge`, `autopurge` | Channel membership* |
+| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `yolo`, `relaunch`, `chat`, `users`, `purge`, `autopurge` | Channel membership* |
 | `/ccslack here` (bind current channel) | `ALLOWED_USERS` |
 | `/ccslack adduser`, `removeuser` | `ALLOWED_USERS` |
 | `/ccslack send` outside the cwd | `ALLOWED_USERS` (on top of channel membership) |

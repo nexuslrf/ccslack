@@ -191,6 +191,7 @@ def register(app: AsyncApp) -> None:
     """Wire the configured slash command (``config.slash_command``)."""
     register_dashboard_actions(app)
     register_yolo_actions(app)
+    register_relaunch_actions(app)
     register_join_actions(app)
 
     slash = config.slash_command
@@ -236,6 +237,7 @@ def register(app: AsyncApp) -> None:
             "toolcalls",
             "thread",
             "yolo",
+            "relaunch",
             "chat",
             "here",
             "adduser",
@@ -385,6 +387,10 @@ def register(app: AsyncApp) -> None:
             await _handle_yolo(client, channel_id, user_id, args)
             return
 
+        if sub == "relaunch":
+            await _handle_relaunch(client, channel_id, user_id, args)
+            return
+
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
@@ -417,6 +423,9 @@ def _help_text() -> str:
         f"• `{slash} yolo [on|off]` — Ctrl-C the running agent and restart it "
         "with approvals/sandbox skipped (`on`, default) or required again "
         "(`off`) — claude/codex/gemini only.\n"
+        f"• `{slash} relaunch [--fresh] [args…]` — Ctrl-C the running agent and "
+        "restart it with your own custom CLI args (continues the session; "
+        "`--fresh` starts clean).\n"
         f"• `{slash} send [path|glob|substring]` — upload file(s) from the "
         "session's cwd (e.g. `send docs/arch.png`, `send *.png`, `send arch`). "
         "With no argument, opens an interactive file browser.\n"
@@ -2239,6 +2248,221 @@ def register_yolo_actions(app) -> None:  # noqa: ANN001
                 channel=channel_id,
                 ts=message_ts,
                 text=":x: Mode switch cancelled.",
+                blocks=[],
+            )
+
+
+# Pending relaunch specs (window_id → exact command to run), set when the
+# confirm message is posted and consumed on the button click. In-memory only:
+# a bot restart drops pending confirmations, which is fine — the user re-runs.
+_PENDING_RELAUNCH: dict[str, str] = {}
+# Reject args that would inject extra keystrokes when typed into the pane.
+_RELAUNCH_CTRL_CHARS = ("\n", "\r")
+
+
+def _relaunch_cmd(
+    provider: str, session_id: str, custom_args: list[str], *, fresh: bool
+) -> str:
+    """Build a relaunch command: base launch + continue/resume + custom args.
+
+    Custom args are ``shlex.quote``-d so multi-word values survive and shell
+    metacharacters become literal arguments to the agent (not the shell) —
+    matching the trust level of ``/ccslack send``.
+    """
+    from .recovery import _build_launch_args_for
+
+    base = resolve_launch_command(provider)
+    resume = _build_launch_args_for(provider, session_id, "fresh" if fresh else "continue")
+    custom = " ".join(shlex.quote(a) for a in custom_args)
+    return " ".join(part for part in (base, resume, custom) if part).strip()
+
+
+async def _handle_relaunch(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    args: list[str],
+) -> None:
+    """``/ccslack relaunch [--fresh] [extra cli args…]`` — restart this agent.
+
+    Like ``yolo`` but with *arbitrary* launch flags instead of the fixed
+    skip-approvals flag: ``Ctrl-C`` the running agent and relaunch it with the
+    provider's base command + the user's custom args, continuing the same
+    conversation (``--fresh`` starts a clean session). The actual restart runs
+    on the confirm button so the user first sees the exact command.
+    """
+    fresh = False
+    custom = list(args)
+    if custom and custom[0].lower() in ("--fresh", "fresh"):
+        fresh = True
+        custom = custom[1:]
+
+    if any(ch in a for a in custom for ch in _RELAUNCH_CTRL_CHARS):
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: relaunch args must be a single line.",
+        )
+        return
+
+    window_id = thread_router.get_window_for_channel(channel_id)
+    if window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `relaunch` only works inside a bound session channel.",
+        )
+        return
+
+    live = await tmux_manager.find_window_by_id(window_id)
+    if live is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: the session window is dead — use `/ccslack restore` first.",
+        )
+        return
+
+    view = session_manager.view_window(window_id)
+    provider = (view.provider_name if view else "") or config.provider_name
+    full_cmd = _relaunch_cmd(
+        provider, (view.session_id or "") if view else "", custom, fresh=fresh
+    )
+    _PENDING_RELAUNCH[window_id] = full_cmd
+
+    continuity = (
+        "Starts a *fresh* session."
+        if fresh
+        else "The current conversation continues."
+    )
+    header = (
+        f":arrows_counterclockwise: *Relaunch `{provider}`?*\n"
+        f"This will `Ctrl-C` the running process and restart it as:\n"
+        f"```{full_cmd}```\n{continuity}"
+    )
+    await client.chat_postMessage(
+        channel=channel_id,
+        text=f":arrows_counterclockwise: Relaunch `{provider}`?",
+        blocks=[
+            {"type": "section", "text": {"type": "mrkdwn", "text": header}},
+            {
+                "type": "actions",
+                "block_id": f"ccslack_relaunch_actions:{window_id}",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": "ccslack_relaunch_confirm",
+                        "style": "danger",
+                        "text": {
+                            "type": "plain_text",
+                            "text": ":arrows_counterclockwise: Confirm relaunch",
+                        },
+                        "value": window_id,
+                    },
+                    {
+                        "type": "button",
+                        "action_id": "ccslack_relaunch_cancel",
+                        "text": {"type": "plain_text", "text": "Cancel"},
+                        "value": window_id,
+                    },
+                ],
+            },
+        ],
+    )
+
+
+def register_relaunch_actions(app) -> None:  # noqa: ANN001
+    """Wire the relaunch confirm / cancel button actions."""
+
+    @app.action("ccslack_relaunch_confirm")
+    async def on_relaunch_confirm(ack, body, client) -> None:  # noqa: ANN001
+        await ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel_id = body.get("channel", {}).get("id", "")
+        message_ts = (body.get("message") or {}).get("ts", "")
+
+        from .auth import is_authorized
+
+        if not is_authorized(user_id, channel_id):
+            return
+
+        window_id = ""
+        for action in body.get("actions", []) or []:
+            if action.get("action_id") == "ccslack_relaunch_confirm":
+                window_id = action.get("value", "")
+                break
+        full_cmd = _PENDING_RELAUNCH.pop(window_id, "")
+        if not window_id or not full_cmd:
+            if message_ts and channel_id:
+                await client.chat_update(
+                    channel=channel_id,
+                    ts=message_ts,
+                    text="ccslack: this relaunch request expired — re-run `relaunch`.",
+                    blocks=[],
+                )
+            return
+
+        live = await tmux_manager.find_window_by_id(window_id)
+        if live is None:
+            if message_ts and channel_id:
+                await client.chat_update(
+                    channel=channel_id,
+                    ts=message_ts,
+                    text="ccslack: window died before the relaunch.",
+                    blocks=[],
+                )
+            return
+
+        # Exit the running agent back to a shell (single Ctrl-C only interrupts
+        # the current task), else the command below is typed into the agent.
+        exited = await tmux_manager.interrupt_agent_to_shell(window_id)
+        if not exited:
+            if message_ts and channel_id:
+                await client.chat_update(
+                    channel=channel_id,
+                    ts=message_ts,
+                    text=(
+                        ":warning: Couldn't exit the running agent (it ignored "
+                        "repeated Ctrl-C). Relaunch aborted — try `/ccslack kill` "
+                        "then `/ccslack restore`."
+                    ),
+                    blocks=[],
+                )
+            return
+
+        await tmux_manager.send_keys(window_id, full_cmd, literal=False, enter=True)
+
+        if message_ts and channel_id:
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text=f":arrows_counterclockwise: *Relaunched* as `{full_cmd}`.",
+                blocks=[],
+            )
+
+        # Refresh the pinned status message.
+        from .status import update_status
+
+        bolt_client = BoltSlackClient(client)
+        await update_status(bolt_client, channel_id, window_id, "idle")
+
+    @app.action("ccslack_relaunch_cancel")
+    async def on_relaunch_cancel(ack, body, client) -> None:  # noqa: ANN001
+        await ack()
+        channel_id = body.get("channel", {}).get("id", "")
+        message_ts = (body.get("message") or {}).get("ts", "")
+        for action in body.get("actions", []) or []:
+            if action.get("action_id") == "ccslack_relaunch_cancel":
+                _PENDING_RELAUNCH.pop(action.get("value", ""), None)
+                break
+        if message_ts and channel_id:
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text=":x: Relaunch cancelled.",
                 blocks=[],
             )
 
