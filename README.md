@@ -7,7 +7,7 @@
 
 **ccslack** bridges Slack and `tmux`-running AI coding agents. Each Slack
 channel binds to one `tmux` window running one agent CLI — Claude Code,
-Codex, Gemini, Pi, or a plain shell. Read your agent's output, click
+Codex, Gemini, Pi, Cursor, or a plain shell. Read your agent's output, click
 permission prompts, drive arrow-key pickers, screenshot the terminal,
 all from Slack.
 
@@ -34,8 +34,9 @@ the per-feature Telegram → Slack mapping table.
 | 📤 `/ccslack send` | Upload file(s) from the session's cwd — no-arg opens an interactive file browser, or pass a path/glob/substring. Project-scoped security filters (lexical path containment, secrets, gitleaks); files ≥10 MB ask for a one-tap confirm. Meta users can reach outside the cwd |
 | 🛑 `/ccslack kill` | Kill the current session, a specific session, or `--all --confirm` everything |
 | 💀 Recovery banner | When a window dies, a banner with Fresh / Continue / Resume / Archive buttons appears in the bound channel |
-| 🔕 `/ccslack mute` | Per-channel notification mode: `all` / `errors` / `off` |
+| 🔕 `/ccslack mute` | Per-channel notification mode: `all` / `errors` / `off` / `silent` (nothing posts back; input still runs — monitor via `/toolbar` + `/screenshot`) |
 | ⚡ `/ccslack yolo [on\|off]` | Switch the running agent in/out of skip-approvals mode without losing context |
+| 🔄 `/ccslack relaunch [--fresh] [args…]` | Restart the running agent with your own custom CLI args (continues the session by default) |
 | 💬 `/ccslack chat` | Start a human-only thread in the channel — replies in it are not forwarded to the agent |
 | 📊 Table render | When an agent answer contains a markdown table, offer a button to render it as a clean image (Slack renders tables poorly) |
 | 👥 Channel-membership auth | Anyone you invite to a session channel can drive that session — no need to add every teammate to `ALLOWED_USERS` |
