@@ -238,6 +238,8 @@ def register(app: AsyncApp) -> None:
             "thread",
             "yolo",
             "relaunch",
+            "manual",
+            "run",
             "chat",
             "here",
             "adduser",
@@ -391,6 +393,14 @@ def register(app: AsyncApp) -> None:
             await _handle_relaunch(client, channel_id, user_id, args)
             return
 
+        if sub == "manual":
+            await _handle_manual(client, channel_id, user_id, args)
+            return
+
+        if sub == "run":
+            await _handle_run(client, channel_id, user_id, raw_text)
+            return
+
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
@@ -426,6 +436,10 @@ def _help_text() -> str:
         f"• `{slash} relaunch [--fresh] [args…]` — Ctrl-C the running agent and "
         "restart it with your own custom CLI args (continues the session; "
         "`--fresh` starts clean).\n"
+        f"• `{slash} manual [on|off]` — human-first channel: messages stay as "
+        f"chat; drive the agent by @-mentioning me or `{slash} run`.\n"
+        f"• `{slash} run <prompt>` — explicitly send a prompt to the agent "
+        "(the way to reach it in `manual` mode).\n"
         f"• `{slash} send [path|glob|substring]` — upload file(s) from the "
         "session's cwd (e.g. `send docs/arch.png`, `send *.png`, `send arch`). "
         "With no argument, opens an interactive file browser.\n"
@@ -1898,6 +1912,127 @@ async def _handle_thread(
         channel=channel_id,
         user=user_id,
         text=f"ccslack: tool-call threading → {labels.get(mode, mode)}",
+    )
+
+
+_MANUAL_ALIASES = {
+    "on": "manual",
+    "manual": "manual",
+    "off": "auto",
+    "auto": "auto",
+}
+
+
+async def _handle_manual(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    args: list[str],
+) -> None:
+    """``/ccslack manual [on|off]`` — make this channel human-first.
+
+    In ``manual`` mode a plain message stays as chat and is not forwarded; the
+    agent runs only when the message @-mentions the bot or via ``/ccslack run``.
+    ``auto`` (default) forwards every message. No arg toggles.
+    """
+    window_id = thread_router.get_window_for_channel(channel_id)
+    if window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `manual` only works inside a bound session channel.",
+        )
+        return
+
+    if args:
+        mode = _MANUAL_ALIASES.get(args[0].lower())
+        if mode is None:
+            await _post_ephemeral(
+                client.chat_postEphemeral,
+                channel=channel_id,
+                user=user_id,
+                text=f"ccslack: unknown mode `{args[0]}` — pick `on` or `off`.",
+            )
+            return
+        session_manager.set_input_mode(window_id, mode)
+    else:
+        mode = session_manager.toggle_input_mode(window_id)
+
+    slash = config.slash_command
+    if mode == "manual":
+        label = (
+            ":raised_hand: *manual* — messages here stay as chat. Drive the agent "
+            f"by @-mentioning me or `{slash} run <prompt>`."
+        )
+    else:
+        label = ":speech_balloon: *auto* — every message is sent to the agent (default)."
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=f"ccslack: input mode → {label}",
+    )
+
+
+async def _handle_run(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    raw_text: str,
+) -> None:
+    """``/ccslack run <prompt>`` — explicitly send a prompt to this channel's
+    agent. Works in any input mode; the essential trigger in ``manual`` mode.
+    """
+    slash = config.slash_command
+    # Keep the prompt's original spacing/quoting — only strip the leading `run`.
+    parts = raw_text.split(None, 1)
+    prompt = parts[1].strip() if len(parts) > 1 else ""
+    if not prompt:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack: usage `{slash} run <prompt>`.",
+        )
+        return
+
+    window_id = thread_router.get_window_for_channel(channel_id)
+    if window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `run` only works inside a bound session channel.",
+        )
+        return
+
+    live = await tmux_manager.find_window_by_id(window_id)
+    if live is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: the session window is dead — use `/ccslack restore` first.",
+        )
+        return
+
+    # Lazy: shared delivery pulls shell-capture machinery.
+    from ..slack_inbound import decode_slack_text
+    from .agent_input import deliver_to_agent
+
+    ok = await deliver_to_agent(
+        client, channel_id, window_id, decode_slack_text(prompt), slack_ts=None
+    )
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=(
+            ":inbox_tray: sent to the agent."
+            if ok
+            else "ccslack: couldn't reach the session — try `/ccslack restore`."
+        ),
     )
 
 

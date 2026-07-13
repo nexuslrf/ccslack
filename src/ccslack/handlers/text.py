@@ -5,8 +5,12 @@ Walking-skeleton routing:
   * Bot messages and message-subtype edits / joins / leaves are ignored.
   * Messages in unbound channels (including the meta channel) are ignored —
     use ``/ccslack`` slash commands there instead.
-  * Messages in bound session channels are forwarded verbatim to the bound
-    tmux window via ``tmux_manager.send_keys``.
+  * Messages in bound session channels are forwarded to the bound tmux window
+    (via ``agent_input.deliver_to_agent``) — decoded from Slack's link/entity
+    encoding first, with the bot @-mention stripped.
+  * In ``manual`` input-mode channels (``/ccslack manual on``) a plain message
+    stays as human chat and is *not* forwarded; the agent runs only when the
+    message @-mentions the bot (or via ``/ccslack run``).
 
 Authorization: the message author must be in ``ALLOWED_USERS``. A reaction
 (``:no_entry_sign:``) is added to messages from unauthorized users so they
@@ -20,11 +24,10 @@ from typing import TYPE_CHECKING
 
 from slack_sdk.errors import SlackApiError
 
-from ..slack_client import BoltSlackClient
+from .. import window_query
 from ..slack_inbound import decode_slack_text
 from ..thread_router import thread_router
-from ..tmux_manager import tmux_manager
-from . import shell_capture, shell_marker
+from .agent_input import deliver_to_agent
 from .auth import is_authorized
 
 if TYPE_CHECKING:
@@ -37,18 +40,14 @@ def register(app: AsyncApp) -> None:
     """Wire the inbound ``message`` event handler."""
 
     @app.event("message")
-    async def on_message(event: dict, client) -> None:  # noqa: ANN001
+    async def on_message(event: dict, client, context) -> None:  # noqa: ANN001
         # Ignore bot messages, subtype events (edits, joins, …), thread broadcasts.
         if event.get("bot_id") or event.get("subtype"):
             return
 
         channel_id = event.get("channel", "")
         user_id = event.get("user", "")
-        # Slack encodes inbound text: it wraps auto-linked URLs and mentions in
-        # <…> and escapes literal &,<,> as HTML entities. Decode before we type
-        # it into tmux, or e.g. `git clone <https://…>` reaches bash with the
-        # angle brackets intact and fails as a redirection.
-        text = decode_slack_text(event.get("text", ""))
+        raw_text = event.get("text", "")
 
         if not channel_id or not user_id:
             return
@@ -68,44 +67,33 @@ def register(app: AsyncApp) -> None:
             await _react(client, channel_id, event.get("ts", ""), "no_entry_sign")
             return
 
-        if not text.strip():
+        # Manual-input channels are human-first: a plain message stays as chat
+        # and is NOT forwarded. The agent runs only when the message @-mentions
+        # the bot (complementary to `/ccslack run`). Either way we strip the
+        # bot mention so the agent receives a clean prompt.
+        bot_user_id = context.get("bot_user_id") or ""
+        mention = f"<@{bot_user_id}>" if bot_user_id else ""
+        mentioned = bool(mention) and mention in raw_text
+        if window_query.get_input_mode(window_id) == "manual" and not mentioned:
+            return
+        if mention:
+            raw_text = raw_text.replace(mention, " ")
+
+        # Slack encodes inbound text: it wraps auto-linked URLs and mentions in
+        # <…> and escapes literal &,<,> as HTML entities. Decode before we type
+        # it into tmux, or e.g. `git clone <https://…>` reaches bash with the
+        # angle brackets intact and fails as a redirection.
+        text = decode_slack_text(raw_text).strip()
+        if not text:
             return
 
-        # Two shell paths in priority order:
-        #   1. Marker-driven (preferred) — when the ⌘N⌘ prompt marker is
-        #      present, the passive monitor in the polling loop picks up
-        #      output as it streams. We just record the user's Slack ts
-        #      so the eventual exit code can land as a ✅/❌ reaction.
-        #   2. Pane-diff fallback — no marker (setup never ran, ``exec
-        #      bash`` blew it away, exotic shell). Use the original
-        #      pre/post snapshot diff.
-        is_shell = shell_capture.is_shell_window(window_id)
-        marker_active = False
-        if is_shell:
-            marker_active = await shell_marker.has_marker(window_id)
-            if marker_active:
-                shell_marker.mark_slack_command(
-                    window_id, slack_user_message_ts=event.get("ts", "")
-                )
-            else:
-                await shell_capture.snapshot_pre_send(window_id, command=text)
-
-        try:
-            await tmux_manager.send_keys(window_id, text)
-        except OSError, RuntimeError:
-            logger.exception("send_keys failed for window %s", window_id)
-            await _react(client, channel_id, event.get("ts", ""), "warning")
-            return
-
-        # ✓ reaction confirms the keypress reached tmux. On the marker path,
-        # this will be replaced by ✅ / ❌ from ``shell_marker`` once the
-        # command finishes and the exit code lands.
-        await _react(client, channel_id, event.get("ts", ""), "white_check_mark")
-
-        if is_shell and not marker_active:
-            shell_capture.schedule_capture(
-                BoltSlackClient(client), channel_id, window_id
-            )
+        ts = event.get("ts", "")
+        # ✓ reaction confirms the keypress reached tmux. On the shell marker
+        # path this is later replaced by ✅ / ❌ once the exit code lands.
+        if await deliver_to_agent(client, channel_id, window_id, text, slack_ts=ts):
+            await _react(client, channel_id, ts, "white_check_mark")
+        else:
+            await _react(client, channel_id, ts, "warning")
 
 
 async def _react(

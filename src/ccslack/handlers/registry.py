@@ -60,12 +60,17 @@ def _register_health_handlers(app: AsyncApp) -> None:
     async def on_app_mention(event: dict, say) -> None:  # noqa: ANN001
         """Respond to @ccslack in the meta channel with a status ping."""
         # Lazy: keep the import here so the registry stays a thin top-level wire.
+        from ..thread_router import thread_router
         from .auth import is_authorized, is_meta_surface
 
         channel = event.get("channel", "")
         user = event.get("user", "")
         if not is_authorized(user, channel):
             logger.info("Ignoring app_mention from unauthorized user %s", user)
+            return
+        # In a bound session channel, @ccslack is a way to drive the agent — the
+        # `message` event handler forwards it. Don't also post a health ping.
+        if thread_router.has_channel(channel):
             return
         if not is_meta_surface(channel):
             from .meta import _meta_surface_hint

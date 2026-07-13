@@ -347,6 +347,34 @@ reach the agent as usual.
 - **Where**: a bound session channel.
 - **Auth**: channel membership.
 
+### `/ccslack manual [on|off]`
+
+Make the **whole channel** human-first. Where `/ccslack chat` carves out a
+single human-only thread, `manual` inverts the default for the channel:
+
+| Mode | Effect |
+|---|---|
+| `auto` (default) | Every message is forwarded to the agent. |
+| `manual` (`on`) | Plain messages stay as chat and are **not** forwarded. The agent runs only when you **@-mention the bot** *or* use [`/ccslack run`](#-ccslack-run-prompt) — the two are complementary. |
+
+No arg toggles. The bot @-mention is stripped before the prompt reaches the
+agent (in both modes), so `@ccslack fix the build` sends just `fix the build`.
+Persisted per channel; survives a bot restart.
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
+### `/ccslack run <prompt>`
+
+Explicitly send `<prompt>` to this channel's agent — the essential trigger in
+`manual` mode, and a convenient one-off in `auto` mode. The prompt's spacing and
+quoting are preserved; Slack link/entity encoding is decoded (so pasted URLs
+work). Confirms with an ephemeral acknowledgement; the agent's reply (and, for
+agent providers, the echoed prompt) appears in the channel as usual.
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
 ### `/ccslack here <dir> [provider]`
 
 Bind **the current channel** to a fresh tmux session — the bring-your-own-channel
@@ -624,7 +652,7 @@ it.
 | Dashboard 🗑️ Kill button | `ALLOWED_USERS` |
 | `/ccslack kill --all`, kill by `<#channel>` / `C…` / `@N` | `ALLOWED_USERS` |
 | `/ccslack kill` (from session channel) | Channel membership |
-| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `yolo`, `relaunch`, `chat`, `users`, `purge`, `autopurge` | Channel membership* |
+| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `yolo`, `relaunch`, `manual`, `run`, `chat`, `users`, `purge`, `autopurge` | Channel membership* |
 | `/ccslack here` (bind current channel) | `ALLOWED_USERS` |
 | `/ccslack adduser`, `removeuser` | `ALLOWED_USERS` |
 | `/ccslack send` outside the cwd | `ALLOWED_USERS` (on top of channel membership) |

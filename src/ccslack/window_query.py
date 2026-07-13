@@ -21,6 +21,7 @@ from .window_state_store import (
     BATCH_MODES,
     DEFAULT_APPROVAL_MODE,
     DEFAULT_BATCH_MODE,
+    DEFAULT_INPUT_MODE,
     DEFAULT_THREAD_TOOL_CALLS,
     DEFAULT_TOOL_CALL_VISIBILITY,
     THREAD_TOOL_CALLS_MODES,
@@ -68,6 +69,12 @@ def get_notification_mode(window_id: str) -> str:
     """Get notification mode for a window (default: 'all')."""
     state = window_store.window_states.get(window_id)
     return state.notification_mode if state else "all"
+
+
+def get_input_mode(window_id: str) -> str:
+    """Get input mode for a window (default: 'auto')."""
+    state = window_store.window_states.get(window_id)
+    return state.input_mode if state else DEFAULT_INPUT_MODE
 
 
 def get_batch_mode(window_id: str) -> str:

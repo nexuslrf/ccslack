@@ -49,6 +49,13 @@ DEFAULT_TOOL_CALL_VISIBILITY: str = "default"
 THREAD_TOOL_CALLS_MODES: tuple[str, ...] = ("default", "on", "off")
 DEFAULT_THREAD_TOOL_CALLS: str = "default"
 
+# Per-window input mode. "auto" (default) forwards every channel message to the
+# agent. "manual" makes the channel human-first: plain messages stay as chat and
+# are NOT forwarded; the agent is driven only by @-mentioning the bot or
+# ``/ccslack run <prompt>``.
+INPUT_MODES: tuple[str, ...] = ("auto", "manual")
+DEFAULT_INPUT_MODE: str = "auto"
+
 WINDOW_ORIGINS: frozenset[str] = frozenset(
     {"manual_discovered", "ccslack_created", "external"}
 )
@@ -159,6 +166,7 @@ class WindowState:
     batch_mode: str = DEFAULT_BATCH_MODE
     tool_call_visibility: str = DEFAULT_TOOL_CALL_VISIBILITY
     thread_tool_calls: str = DEFAULT_THREAD_TOOL_CALLS
+    input_mode: str = DEFAULT_INPUT_MODE
     external: bool = False
     origin: str = DEFAULT_WINDOW_ORIGIN
     panes: dict[str, PaneInfo] = field(default_factory=dict)
@@ -201,6 +209,8 @@ class WindowState:
             d["tool_call_visibility"] = self.tool_call_visibility
         if self.thread_tool_calls != DEFAULT_THREAD_TOOL_CALLS:
             d["thread_tool_calls"] = self.thread_tool_calls
+        if self.input_mode != DEFAULT_INPUT_MODE:
+            d["input_mode"] = self.input_mode
         if self.external:
             d["external"] = True
         if self.origin != DEFAULT_WINDOW_ORIGIN:
@@ -246,6 +256,7 @@ class WindowState:
                 "tool_call_visibility", DEFAULT_TOOL_CALL_VISIBILITY
             ),
             thread_tool_calls=data.get("thread_tool_calls", DEFAULT_THREAD_TOOL_CALLS),
+            input_mode=data.get("input_mode", DEFAULT_INPUT_MODE),
             external=data.get("external", False),
             origin=(
                 data.get("origin", DEFAULT_WINDOW_ORIGIN)
@@ -645,6 +656,32 @@ class WindowStateStore:
         idx = modes.index(current) if current in modes else 0
         new_mode = modes[(idx + 1) % len(modes)]
         self.set_thread_tool_calls(window_id, new_mode)
+        return new_mode
+
+    # ------------------------------------------------------------------
+    # Input mode (auto / manual)
+    # ------------------------------------------------------------------
+
+    _INPUT_MODES = INPUT_MODES
+
+    def get_input_mode(self, window_id: str) -> str:
+        """Get input mode for a window (default: 'auto')."""
+        state = self.window_states.get(window_id)
+        return state.input_mode if state else DEFAULT_INPUT_MODE
+
+    def set_input_mode(self, window_id: str, mode: str) -> None:
+        """Set input mode for a window ('auto' | 'manual')."""
+        if mode not in self._INPUT_MODES:
+            raise ValueError(f"Invalid input_mode: {mode!r}")
+        state = self.get_window_state(window_id)
+        if state.input_mode != mode:
+            state.input_mode = mode
+            self._schedule_save()
+
+    def toggle_input_mode(self, window_id: str) -> str:
+        """Flip input mode between 'auto' and 'manual'. Returns the new mode."""
+        new_mode = "auto" if self.get_input_mode(window_id) == "manual" else "manual"
+        self.set_input_mode(window_id, new_mode)
         return new_mode
 
     # ------------------------------------------------------------------
