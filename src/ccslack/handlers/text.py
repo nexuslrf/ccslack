@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 from slack_sdk.errors import SlackApiError
 
 from ..slack_client import BoltSlackClient
+from ..slack_inbound import decode_slack_text
 from ..thread_router import thread_router
 from ..tmux_manager import tmux_manager
 from . import shell_capture, shell_marker
@@ -43,7 +44,11 @@ def register(app: AsyncApp) -> None:
 
         channel_id = event.get("channel", "")
         user_id = event.get("user", "")
-        text = event.get("text", "")
+        # Slack encodes inbound text: it wraps auto-linked URLs and mentions in
+        # <…> and escapes literal &,<,> as HTML entities. Decode before we type
+        # it into tmux, or e.g. `git clone <https://…>` reaches bash with the
+        # angle brackets intact and fails as a redirection.
+        text = decode_slack_text(event.get("text", ""))
 
         if not channel_id or not user_id:
             return
