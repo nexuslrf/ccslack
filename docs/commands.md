@@ -369,8 +369,13 @@ Persisted per channel; survives a bot restart.
 Explicitly send `<prompt>` to this channel's agent — the essential trigger in
 `manual` mode, and a convenient one-off in `auto` mode. The prompt's spacing and
 quoting are preserved; Slack link/entity encoding is decoded (so pasted URLs
-work). Confirms with an ephemeral acknowledgement; the agent's reply (and, for
-agent providers, the echoed prompt) appears in the channel as usual.
+work).
+
+`run` is the **quiet** path: the invocation is ephemeral *and* the agent-side
+echo of the prompt is suppressed, so only the agent's reply appears in the
+channel — the prompt leaves no visible trace. When you *want* the prompt shown,
+**@-mention the bot** instead (your message is visible and it's echoed). The two
+are complementary.
 
 - **Where**: a bound session channel.
 - **Auth**: channel membership.

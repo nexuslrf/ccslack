@@ -8,7 +8,7 @@ from slack_bolt.authorization import AuthorizeResult
 from ccslack import window_query
 from ccslack.config import config
 from ccslack.event_source import dispatch_payload
-from ccslack.handlers import agent_input, text
+from ccslack.handlers import agent_input, run_echo, text
 from ccslack.handlers.meta import _handle_manual, _handle_run
 from ccslack.session import session_manager
 from ccslack.slack_client import FakeSlackClient
@@ -20,9 +20,11 @@ from ccslack.window_state_store import WindowState, window_store
 def _clean():
     window_store.window_states.clear()
     thread_router.reset()
+    run_echo.reset()
     yield
     window_store.window_states.clear()
     thread_router.reset()
+    run_echo.reset()
 
 
 # ── store ────────────────────────────────────────────────────────────────
@@ -112,6 +114,47 @@ async def test_run_forwards_prompt(monkeypatch):
     assert sent["text"] == "please build the project"
     assert sent["slack_ts"] is None
     assert "sent to the agent" in client.last_call("chat_postEphemeral").kwargs["text"]
+    # run is quiet — it registers one echo suppression for the window.
+    assert run_echo.consume_user_echo_suppression("@1") is True
+    assert run_echo.consume_user_echo_suppression("@1") is False
+
+
+@pytest.mark.asyncio
+async def test_run_failure_does_not_suppress_echo(monkeypatch):
+    _bind("C1", "@1")
+
+    async def _fail(*a, **k):
+        return False
+
+    async def _live(_wid):
+        return object()
+
+    monkeypatch.setattr(agent_input, "deliver_to_agent", _fail)
+    monkeypatch.setattr("ccslack.handlers.meta.tmux_manager.find_window_by_id", _live)
+    client = FakeSlackClient()
+
+    await _handle_run(client, "C1", "U1", "run do it")
+
+    assert "couldn't reach" in client.last_call("chat_postEphemeral").kwargs["text"]
+    assert run_echo.consume_user_echo_suppression("@1") is False  # no suppression
+
+
+def test_run_echo_consume_is_fifo_and_bounded():
+    run_echo.suppress_next_user_echo("@1")
+    run_echo.suppress_next_user_echo("@1")
+    assert run_echo.consume_user_echo_suppression("@1") is True
+    assert run_echo.consume_user_echo_suppression("@1") is True
+    assert run_echo.consume_user_echo_suppression("@1") is False
+
+
+def test_run_echo_expires(monkeypatch):
+    import ccslack.handlers.run_echo as re_mod
+
+    run_echo.suppress_next_user_echo("@1")  # deadline = now + TTL
+    # Jump past the TTL — the stale token must not swallow a later real echo.
+    future = time.monotonic() + 100
+    monkeypatch.setattr(re_mod.time, "monotonic", lambda: future)
+    assert run_echo.consume_user_echo_suppression("@1") is False
 
 
 @pytest.mark.asyncio

@@ -2018,18 +2018,23 @@ async def _handle_run(
         return
 
     # Lazy: shared delivery pulls shell-capture machinery.
+    from . import run_echo
     from ..slack_inbound import decode_slack_text
     from .agent_input import deliver_to_agent
 
     ok = await deliver_to_agent(
         client, channel_id, window_id, decode_slack_text(prompt), slack_ts=None
     )
+    if ok:
+        # `run` is the quiet path — drop the agent-side echo so the prompt
+        # leaves no visible trace (use `@ccslack` when you want it shown).
+        run_echo.suppress_next_user_echo(window_id)
     await _post_ephemeral(
         client.chat_postEphemeral,
         channel=channel_id,
         user=user_id,
         text=(
-            ":inbox_tray: sent to the agent."
+            ":inbox_tray: sent to the agent (quiet)."
             if ok
             else "ccslack: couldn't reach the session — try `/ccslack restore`."
         ),

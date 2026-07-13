@@ -203,6 +203,14 @@ async def _route_to_channel(
 
         purge.bump_round(channel_id)
 
+        # A prompt sent via `/ccslack run` is quiet: drop its echo so nothing
+        # visible marks it (the run invocation was ephemeral). @-mentions and
+        # typed messages keep their echo.
+        from .. import run_echo
+
+        if run_echo.consume_user_echo_suppression(window_id):
+            return
+
     # Everything that decides "don't post this normally" (silent mode, the live
     # picker, tool-call visibility, notification modes) lives in one gate so the
     # post path below stays linear.
