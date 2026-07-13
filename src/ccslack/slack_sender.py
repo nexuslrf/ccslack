@@ -36,6 +36,28 @@ MIN_INTERVAL_SECONDS = 1.1
 # Max characters per single post. We chunk above this. Slack's hard limit on
 # the fallback text is ~40k, but we keep blocks-coherent posts well under it.
 MAX_POST_CHARS = SECTION_TEXT_LIMIT * 4
+# Slack rejects a message with more than 50 blocks. A MAX_POST_CHARS chunk
+# yields far fewer, but cap defensively so pathological content degrades
+# gracefully instead of erroring the whole post.
+SLACK_MAX_BLOCKS = 50
+
+
+def _cap_blocks(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Bound a block list to Slack's 50-block limit, flagging any drop."""
+    if len(blocks) <= SLACK_MAX_BLOCKS:
+        return blocks
+    dropped = len(blocks) - (SLACK_MAX_BLOCKS - 1)
+    kept = blocks[: SLACK_MAX_BLOCKS - 1]
+    kept.append(
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"_… truncated {dropped} more block(s)_",
+            },
+        }
+    )
+    return kept
 
 _last_sent: dict[str, float] = {}
 
@@ -88,7 +110,41 @@ async def safe_post(
     Returns the new message ``ts`` (timestamp), or ``None`` if the post failed
     entirely. When ``blocks`` is supplied it is sent verbatim; otherwise blocks
     are built from ``text``.
+
+    Long ``text`` (over ``MAX_POST_CHARS``) is split on paragraph boundaries
+    into a sequence of posts so nothing is truncated — newer models routinely
+    emit answers past a single Slack message's capacity. The **first** part's
+    ``ts`` is returned (the anchor callers pair/record against).
     """
+    if blocks is None and len(text) > MAX_POST_CHARS:
+        first_ts: str | None = None
+        for part in split_message(text):
+            ts = await _post_one(
+                client, channel=channel, text=part, thread_ts=thread_ts, **kwargs
+            )
+            if first_ts is None:
+                first_ts = ts
+        return first_ts
+    return await _post_one(
+        client,
+        channel=channel,
+        text=text,
+        blocks=blocks,
+        thread_ts=thread_ts,
+        **kwargs,
+    )
+
+
+async def _post_one(
+    client: SlackClient,
+    *,
+    channel: str,
+    text: str,
+    blocks: list[dict[str, Any]] | None = None,
+    thread_ts: str | None = None,
+    **kwargs: Any,
+) -> str | None:
+    """Post exactly one Slack message (rate-limited) with block cap + fallback."""
     await rate_limit_send(channel)
     if blocks is None:
         built_blocks, fallback = to_blocks(text)
@@ -101,7 +157,7 @@ async def safe_post(
         "text": fallback or text[:FALLBACK_TEXT_LIMIT],
     }
     if built_blocks:
-        payload["blocks"] = built_blocks
+        payload["blocks"] = _cap_blocks(built_blocks)
     if thread_ts is not None:
         payload["thread_ts"] = thread_ts
     payload.update(kwargs)
@@ -145,7 +201,9 @@ async def safe_update(
         "text": fallback or text[:FALLBACK_TEXT_LIMIT],
     }
     if built_blocks:
-        payload["blocks"] = built_blocks
+        # chat.update targets one message, so we can't spill into more posts —
+        # cap to Slack's block limit (rare; only huge in-place tool-result edits).
+        payload["blocks"] = _cap_blocks(built_blocks)
     payload.update(kwargs)
 
     try:

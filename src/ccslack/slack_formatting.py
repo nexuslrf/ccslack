@@ -67,33 +67,60 @@ def to_blocks(text: str) -> tuple[list[dict[str, Any]], str]:
     fences = list(_CODE_FENCE_RE.finditer(text))
     blocks: list[dict[str, Any]] = []
     if not fences:
-        blocks.append(_mrkdwn_section(text))
+        blocks.extend(_section_blocks(text))
         return blocks, _fallback_text(text)
 
     cursor = 0
     for match in fences:
         prefix = text[cursor : match.start()]
         if prefix.strip():
-            blocks.append(_mrkdwn_section(prefix))
+            blocks.extend(_section_blocks(prefix))
         code = match.group(1)
         if code.strip():
-            blocks.append(_code_block(code))
+            blocks.extend(_code_blocks(code))
         cursor = match.end()
     suffix = text[cursor:]
     if suffix.strip():
-        blocks.append(_mrkdwn_section(suffix))
+        blocks.extend(_section_blocks(suffix))
     return blocks, _fallback_text(text)
 
 
-def _mrkdwn_section(text: str) -> dict[str, Any]:
-    """Build a ``section`` block with mrkdwn text, chunked to the 3000-char limit.
+def _chunk(text: str, limit: int) -> list[str]:
+    """Split *text* into content-preserving pieces of at most *limit* chars.
 
-    Returns *one* block; longer text is truncated with an ellipsis. Callers
-    splitting at the message layer must call ``to_blocks`` per chunk.
+    Prefers a newline boundary within the budget so a chunk rarely bisects a
+    line; falls back to a hard split. Concatenating the pieces reproduces the
+    input exactly (no truncation) — the whole point is that long agent output
+    is *carried across blocks*, never dropped.
     """
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > limit:
+        split = remaining.rfind("\n", 0, limit)
+        if split <= 0:
+            split = limit
+        chunks.append(remaining[:split])
+        remaining = remaining[split:]
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+def _section_blocks(text: str) -> list[dict[str, Any]]:
+    """One or more ``section`` blocks, chunked to the per-block char limit."""
     body = to_mrkdwn(text).strip()
-    if len(body) > SECTION_TEXT_LIMIT:
-        body = body[: SECTION_TEXT_LIMIT - 1] + "…"
+    return [_mrkdwn_section(chunk) for chunk in _chunk(body, SECTION_TEXT_LIMIT)]
+
+
+def _code_blocks(code: str) -> list[dict[str, Any]]:
+    """One or more ``rich_text`` code blocks, chunked to the per-block limit."""
+    return [_code_block(chunk) for chunk in _chunk(code, SECTION_TEXT_LIMIT)]
+
+
+def _mrkdwn_section(text: str) -> dict[str, Any]:
+    """Build a single ``section`` block. Input is expected pre-chunked; a hard
+    cap guards against Slack's 3000-char limit as a last resort."""
+    body = text if len(text) <= SECTION_TEXT_LIMIT else text[: SECTION_TEXT_LIMIT - 1] + "…"
     return {
         "type": "section",
         "text": {"type": "mrkdwn", "text": body},

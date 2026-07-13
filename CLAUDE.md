@@ -92,6 +92,11 @@ uv run ccslack hook --install [--provider codex|gemini|pi]
   `chat.update`s it on state transitions.
 - **Per-channel rate limit**: 1.1 s minimum between outbound messages
   (`slack_sender.rate_limit_send`).
+- **No truncation on long output**: `slack_formatting.to_blocks` chunks long
+  text/code across multiple Block Kit blocks (Slack caps a section at 3000
+  chars), and `slack_sender.safe_post` splits text past `MAX_POST_CHARS` into a
+  sequence of posts (returning the first ts). Newer models emit answers past a
+  single message's capacity; nothing is dropped.
 - **Viewport-only screenshots** (`/screenshot` captures the visible
   pane, not scrollback — successive shots stay the same size).
 
