@@ -21,6 +21,7 @@ from .window_state_store import (
     BATCH_MODES,
     DEFAULT_APPROVAL_MODE,
     DEFAULT_BATCH_MODE,
+    DEFAULT_COMMENTARY_VISIBILITY,
     DEFAULT_INPUT_MODE,
     DEFAULT_THREAD_TOOL_CALLS,
     DEFAULT_TOOL_CALL_VISIBILITY,
@@ -75,6 +76,13 @@ def get_input_mode(window_id: str) -> str:
     """Get input mode for a window (default: 'auto')."""
     state = window_store.window_states.get(window_id)
     return state.input_mode if state else DEFAULT_INPUT_MODE
+
+
+def is_commentary_hidden(window_id: str) -> bool:
+    """True if agent commentary (Codex preamble) is hidden for this window."""
+    state = window_store.window_states.get(window_id)
+    visibility = state.commentary_visibility if state else DEFAULT_COMMENTARY_VISIBILITY
+    return visibility == "hidden"
 
 
 def get_batch_mode(window_id: str) -> str:

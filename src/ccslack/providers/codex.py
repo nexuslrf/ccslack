@@ -455,8 +455,20 @@ def _parse_event_message(
         text = payload.get("message", "")
         if not isinstance(text, str) or not text:
             return [], pending
+        # Codex tags every agent message with a phase: "commentary" (running
+        # narration before tool calls — collapsed in the TUI) vs "final_answer"
+        # (the actual response). Carry it through so downstream can tell the
+        # preamble from the answer.
+        phase = payload.get("phase")
         return (
-            [AgentMessage(text=text, role="assistant", content_type="text")],
+            [
+                AgentMessage(
+                    text=text,
+                    role="assistant",
+                    content_type="text",
+                    phase=phase if isinstance(phase, str) and phase else None,
+                )
+            ],
             pending,
         )
     if payload_type == "task_complete":

@@ -240,6 +240,7 @@ def register(app: AsyncApp) -> None:
             "relaunch",
             "manual",
             "run",
+            "commentary",
             "chat",
             "here",
             "adduser",
@@ -401,6 +402,10 @@ def register(app: AsyncApp) -> None:
             await _handle_run(client, channel_id, user_id, raw_text)
             return
 
+        if sub == "commentary":
+            await _handle_commentary(client, channel_id, user_id, args)
+            return
+
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
@@ -440,6 +445,8 @@ def _help_text() -> str:
         f"chat; drive the agent by @-mentioning me or `{slash} run`.\n"
         f"• `{slash} run <prompt>` — explicitly send a prompt to the agent "
         "(the way to reach it in `manual` mode).\n"
+        f"• `{slash} commentary [show|hide]` — show/hide Codex pre-tool-call "
+        "narration (final answers always post).\n"
         f"• `{slash} send [path|glob|substring]` — upload file(s) from the "
         "session's cwd (e.g. `send docs/arch.png`, `send *.png`, `send arch`). "
         "With no argument, opens an interactive file browser.\n"
@@ -2059,6 +2066,65 @@ async def _handle_run(
             if ok
             else "ccslack: couldn't reach the session — try `/ccslack restore`."
         ),
+    )
+
+
+_COMMENTARY_ALIASES = {
+    "show": "shown",
+    "shown": "shown",
+    "on": "shown",
+    "hide": "hidden",
+    "hidden": "hidden",
+    "off": "hidden",
+}
+
+
+async def _handle_commentary(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    args: list[str],
+) -> None:
+    """``/ccslack commentary [show|hide]`` — show or hide agent commentary.
+
+    Codex marks pre-tool-call narration as *commentary* (vs the *final answer*).
+    Shown by default with a :speech_balloon: marker; `hide` suppresses it so the
+    channel carries only final answers + tool flows. No arg toggles.
+    """
+    window_id = thread_router.get_window_for_channel(channel_id)
+    if window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `commentary` only works inside a bound session channel.",
+        )
+        return
+
+    if args:
+        mode = _COMMENTARY_ALIASES.get(args[0].lower())
+        if mode is None:
+            await _post_ephemeral(
+                client.chat_postEphemeral,
+                channel=channel_id,
+                user=user_id,
+                text=f"ccslack: unknown mode `{args[0]}` — pick `show` or `hide`.",
+            )
+            return
+        session_manager.set_commentary_visibility(window_id, mode)
+    else:
+        mode = session_manager.toggle_commentary_visibility(window_id)
+
+    label = (
+        ":speech_balloon: *shown* — pre-tool-call narration posts (marked)"
+        if mode == "shown"
+        else ":no_bell: *hidden* — only final answers + tool flows post"
+    )
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=f"ccslack: commentary → {label}",
     )
 
 

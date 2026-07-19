@@ -158,6 +158,13 @@ async def _pre_post_suppressed(
         await update_status(client, channel_id, window_id, "active")
         return True
 
+    # Codex commentary (pre-tool-call narration, phase="commentary") can be
+    # hidden per channel so only final answers + tool flows post.
+    if msg.phase == "commentary" and window_query.is_commentary_hidden(window_id):
+        logger.debug("Commentary hidden for window %s; skipping", window_id)
+        await update_status(client, channel_id, window_id, "active")
+        return True
+
     if notification_mode == "silent":
         _buffer_suppressed_answer(window_id, msg, text)
         await update_status(client, channel_id, window_id, "active")
@@ -185,8 +192,17 @@ async def _pre_post_suppressed(
 
 
 def _buffer_suppressed_answer(window_id: str, msg: NewMessage, text: str) -> None:
-    """Stash a suppressed assistant answer so un-muting can flush it."""
-    if msg.role != "user" and msg.content_type == "text" and text.strip():
+    """Stash a suppressed assistant *answer* so un-muting can flush it.
+
+    Skips commentary (Codex preamble) — the buffer should hold the final answer
+    worth catching up on, not running narration.
+    """
+    if (
+        msg.role != "user"
+        and msg.content_type == "text"
+        and msg.phase != "commentary"
+        and text.strip()
+    ):
         from .. import mute_buffer
 
         mute_buffer.remember(window_id, text)
@@ -294,6 +310,10 @@ def _decorate(msg: NewMessage, text: str) -> str:
         return f":wrench: *{tool}*\n{text}"
     if msg.content_type == "tool_result":
         return f":receipt: ```{text}```"
+    # Codex commentary — pre-tool-call narration, not the final answer. Mark it
+    # so it reads as an aside next to the (unmarked) final response.
+    if msg.phase == "commentary":
+        return f":speech_balloon: {text}"
     return text
 
 

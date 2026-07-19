@@ -506,6 +506,15 @@ class SessionManager:
     def toggle_input_mode(self, window_id: str) -> str:
         return window_store.toggle_input_mode(window_id)
 
+    def get_commentary_visibility(self, window_id: str) -> str:
+        return window_store.get_commentary_visibility(window_id)
+
+    def set_commentary_visibility(self, window_id: str, mode: str) -> None:
+        window_store.set_commentary_visibility(window_id, mode)
+
+    def toggle_commentary_visibility(self, window_id: str) -> str:
+        return window_store.toggle_commentary_visibility(window_id)
+
     def get_batch_mode(self, window_id: str) -> str:
         state = self.window_states.get(window_id)
         mode = state.batch_mode if state else DEFAULT_BATCH_MODE

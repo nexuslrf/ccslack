@@ -56,6 +56,12 @@ DEFAULT_THREAD_TOOL_CALLS: str = "default"
 INPUT_MODES: tuple[str, ...] = ("auto", "manual")
 DEFAULT_INPUT_MODE: str = "auto"
 
+# Per-window visibility of agent "commentary" — Codex tags its pre-tool-call
+# narration with phase="commentary" (vs "final_answer"). Shown by default (with
+# a marker); "hidden" suppresses it so only final answers + tool flows post.
+COMMENTARY_VISIBILITY_MODES: tuple[str, ...] = ("shown", "hidden")
+DEFAULT_COMMENTARY_VISIBILITY: str = "shown"
+
 WINDOW_ORIGINS: frozenset[str] = frozenset(
     {"manual_discovered", "ccslack_created", "external"}
 )
@@ -167,6 +173,7 @@ class WindowState:
     tool_call_visibility: str = DEFAULT_TOOL_CALL_VISIBILITY
     thread_tool_calls: str = DEFAULT_THREAD_TOOL_CALLS
     input_mode: str = DEFAULT_INPUT_MODE
+    commentary_visibility: str = DEFAULT_COMMENTARY_VISIBILITY
     external: bool = False
     origin: str = DEFAULT_WINDOW_ORIGIN
     panes: dict[str, PaneInfo] = field(default_factory=dict)
@@ -211,6 +218,8 @@ class WindowState:
             d["thread_tool_calls"] = self.thread_tool_calls
         if self.input_mode != DEFAULT_INPUT_MODE:
             d["input_mode"] = self.input_mode
+        if self.commentary_visibility != DEFAULT_COMMENTARY_VISIBILITY:
+            d["commentary_visibility"] = self.commentary_visibility
         if self.external:
             d["external"] = True
         if self.origin != DEFAULT_WINDOW_ORIGIN:
@@ -257,6 +266,9 @@ class WindowState:
             ),
             thread_tool_calls=data.get("thread_tool_calls", DEFAULT_THREAD_TOOL_CALLS),
             input_mode=data.get("input_mode", DEFAULT_INPUT_MODE),
+            commentary_visibility=data.get(
+                "commentary_visibility", DEFAULT_COMMENTARY_VISIBILITY
+            ),
             external=data.get("external", False),
             origin=(
                 data.get("origin", DEFAULT_WINDOW_ORIGIN)
@@ -682,6 +694,34 @@ class WindowStateStore:
         """Flip input mode between 'auto' and 'manual'. Returns the new mode."""
         new_mode = "auto" if self.get_input_mode(window_id) == "manual" else "manual"
         self.set_input_mode(window_id, new_mode)
+        return new_mode
+
+    # ------------------------------------------------------------------
+    # Commentary visibility (shown / hidden)
+    # ------------------------------------------------------------------
+
+    _COMMENTARY_VISIBILITY_MODES = COMMENTARY_VISIBILITY_MODES
+
+    def get_commentary_visibility(self, window_id: str) -> str:
+        """Get commentary visibility for a window (default: 'shown')."""
+        state = self.window_states.get(window_id)
+        return state.commentary_visibility if state else DEFAULT_COMMENTARY_VISIBILITY
+
+    def set_commentary_visibility(self, window_id: str, mode: str) -> None:
+        """Set commentary visibility for a window ('shown' | 'hidden')."""
+        if mode not in self._COMMENTARY_VISIBILITY_MODES:
+            raise ValueError(f"Invalid commentary_visibility: {mode!r}")
+        state = self.get_window_state(window_id)
+        if state.commentary_visibility != mode:
+            state.commentary_visibility = mode
+            self._schedule_save()
+
+    def toggle_commentary_visibility(self, window_id: str) -> str:
+        """Flip commentary visibility between 'shown' and 'hidden'."""
+        new_mode = (
+            "hidden" if self.get_commentary_visibility(window_id) == "shown" else "shown"
+        )
+        self.set_commentary_visibility(window_id, new_mode)
         return new_mode
 
     # ------------------------------------------------------------------

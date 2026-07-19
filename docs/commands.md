@@ -369,6 +369,25 @@ Persisted per channel; survives a bot restart.
 - **Where**: a bound session channel.
 - **Auth**: channel membership.
 
+### `/ccslack commentary [show|hide]`
+
+Codex tags each agent message with a **phase**: `commentary` (running narration
+*before* each tool call — collapsed in the Codex TUI) vs `final_answer` (the
+actual response). By default commentary posts, prefixed with a :speech_balloon:
+marker so it reads as an aside next to the unmarked final answer.
+
+| Form | Effect |
+|---|---|
+| `/ccslack commentary` | Toggle. |
+| `/ccslack commentary hide` (alias `off`) | Suppress commentary — only final answers + tool flows post. |
+| `/ccslack commentary show` (alias `on`) | Post commentary again (the default). |
+
+Final answers always post regardless. Per channel; persisted. Only Codex
+currently emits a commentary phase (Claude has no equivalent marker).
+
+- **Where**: a bound session channel.
+- **Auth**: channel membership.
+
 ### `/ccslack run <prompt>`
 
 Explicitly send `<prompt>` to this channel's agent — the essential trigger in
@@ -662,7 +681,7 @@ it.
 | Dashboard 🗑️ Kill button | `ALLOWED_USERS` |
 | `/ccslack kill --all`, kill by `<#channel>` / `C…` / `@N` | `ALLOWED_USERS` |
 | `/ccslack kill` (from session channel) | Channel membership |
-| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `yolo`, `relaunch`, `manual`, `run`, `chat`, `users`, `purge`, `autopurge` | Channel membership* |
+| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `yolo`, `relaunch`, `manual`, `run`, `commentary`, `chat`, `users`, `purge`, `autopurge` | Channel membership* |
 | `/ccslack here` (bind current channel) | `ALLOWED_USERS` |
 | `/ccslack adduser`, `removeuser` | `ALLOWED_USERS` |
 | `/ccslack send` outside the cwd | `ALLOWED_USERS` (on top of channel membership) |
