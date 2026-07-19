@@ -40,7 +40,7 @@ the per-feature Telegram → Slack mapping table.
 | 💬 `/ccslack chat` | Start a human-only thread in the channel — replies in it are not forwarded to the agent |
 | ✋ `/ccslack manual [on\|off]` | Human-first channel: plain messages stay as chat; drive the agent by @-mentioning the bot or `/ccslack run` (complementary) |
 | 📨 `/ccslack run <prompt>` | Explicitly send a prompt to the agent — the trigger for `manual` channels |
-| 💬 `/ccslack commentary [show\|hide]` | Codex marks pre-tool-call narration as `commentary` (vs the final answer); show it with a marker or hide it so only answers + tool flows post |
+| 🤔 `/ccslack commentary [show\|hide]` | Codex marks pre-tool-call narration as `commentary` (vs the final answer); show it with a marker or hide it so only answers + tool flows post |
 | 📊 Table render | When an agent answer contains a markdown table, offer a button to render it as a clean image (Slack renders tables poorly) |
 | 👥 Channel-membership auth | Anyone you invite to a session channel can drive that session — no need to add every teammate to `ALLOWED_USERS` |
 | 🌐 Multi-host | Run sessions on several machines from one Slack app + meta channel: a router holds the Slack connection and forwards events to per-host workers over SSH. Opt-in; standalone is unchanged ([docs](docs/multi-host.md)) |

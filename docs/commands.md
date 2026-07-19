@@ -373,7 +373,7 @@ Persisted per channel; survives a bot restart.
 
 Codex tags each agent message with a **phase**: `commentary` (running narration
 *before* each tool call — collapsed in the Codex TUI) vs `final_answer` (the
-actual response). By default commentary posts, prefixed with a :speech_balloon:
+actual response). By default commentary posts, prefixed with a :thinking_face:
 marker so it reads as an aside next to the unmarked final answer.
 
 | Form | Effect |

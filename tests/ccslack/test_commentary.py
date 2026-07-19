@@ -67,7 +67,7 @@ def test_codex_agent_message_carries_commentary_phase():
 
 
 def test_commentary_gets_marker_final_answer_does_not():
-    assert _decorate(_commentary(), "narration").startswith(":speech_balloon:")
+    assert _decorate(_commentary(), "narration").startswith(":thinking_face:")
     assert _decorate(_final(), "the answer") == "the answer"
 
 

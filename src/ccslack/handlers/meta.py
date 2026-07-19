@@ -2088,7 +2088,7 @@ async def _handle_commentary(
     """``/ccslack commentary [show|hide]`` — show or hide agent commentary.
 
     Codex marks pre-tool-call narration as *commentary* (vs the *final answer*).
-    Shown by default with a :speech_balloon: marker; `hide` suppresses it so the
+    Shown by default with a :thinking_face: marker; `hide` suppresses it so the
     channel carries only final answers + tool flows. No arg toggles.
     """
     window_id = thread_router.get_window_for_channel(channel_id)
@@ -2116,7 +2116,7 @@ async def _handle_commentary(
         mode = session_manager.toggle_commentary_visibility(window_id)
 
     label = (
-        ":speech_balloon: *shown* — pre-tool-call narration posts (marked)"
+        ":thinking_face: *shown* — pre-tool-call narration posts (marked)"
         if mode == "shown"
         else ":no_bell: *hidden* — only final answers + tool flows post"
     )

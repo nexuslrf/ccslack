@@ -313,7 +313,7 @@ def _decorate(msg: NewMessage, text: str) -> str:
     # Codex commentary — pre-tool-call narration, not the final answer. Mark it
     # so it reads as an aside next to the (unmarked) final response.
     if msg.phase == "commentary":
-        return f":speech_balloon: {text}"
+        return f":thinking_face: {text}"
     return text
 
 
