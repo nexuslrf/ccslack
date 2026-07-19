@@ -14,7 +14,7 @@ SessionManager-owned instance (raises RuntimeError until SessionManager
 has constructed the store). The legacy module attribute ``window_store``
 is a thin proxy that delegates to the same instance for backward compat.
 
-Key types: WindowState, APPROVAL_MODES, BATCH_MODES, NOTIFICATION_MODES.
+Key types: WindowState, BATCH_MODES, NOTIFICATION_MODES.
 """
 
 from __future__ import annotations
@@ -25,10 +25,6 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Self, cast
 
 logger = structlog.get_logger()
-
-APPROVAL_MODES: frozenset[str] = frozenset({"normal", "yolo"})
-DEFAULT_APPROVAL_MODE = "normal"
-YOLO_APPROVAL_MODE = "yolo"
 
 BATCH_MODES: frozenset[str] = frozenset({"batched", "verbose"})
 DEFAULT_BATCH_MODE = "batched"
@@ -143,7 +139,6 @@ class WindowState:
         transcript_path: Direct path to JSONL transcript file (from hook payload)
         notification_mode: "all" | "errors_only" | "muted" | "silent"
         provider_name: Name of the agent provider for this window
-        approval_mode: "normal" | "yolo"
         batch_mode: "batched" | "verbose"
         tool_call_visibility: "default" | "shown" | "hidden"
         external: True for windows owned by external tools (emdash) — never killed by ccslack
@@ -168,7 +163,6 @@ class WindowState:
     transcript_path: str = ""
     notification_mode: str = "all"
     provider_name: str = ""
-    approval_mode: str = DEFAULT_APPROVAL_MODE
     batch_mode: str = DEFAULT_BATCH_MODE
     tool_call_visibility: str = DEFAULT_TOOL_CALL_VISIBILITY
     thread_tool_calls: str = DEFAULT_THREAD_TOOL_CALLS
@@ -208,8 +202,6 @@ class WindowState:
             d["notification_mode"] = self.notification_mode
         if self.provider_name:
             d["provider_name"] = self.provider_name
-        if self.approval_mode != DEFAULT_APPROVAL_MODE:
-            d["approval_mode"] = self.approval_mode
         if self.batch_mode != DEFAULT_BATCH_MODE:
             d["batch_mode"] = self.batch_mode
         if self.tool_call_visibility != DEFAULT_TOOL_CALL_VISIBILITY:
@@ -259,7 +251,6 @@ class WindowState:
             transcript_path=data.get("transcript_path", ""),
             notification_mode=data.get("notification_mode", "all"),
             provider_name=data.get("provider_name", ""),
-            approval_mode=data.get("approval_mode", DEFAULT_APPROVAL_MODE),
             batch_mode=data.get("batch_mode", DEFAULT_BATCH_MODE),
             tool_call_visibility=data.get(
                 "tool_call_visibility", DEFAULT_TOOL_CALL_VISIBILITY
@@ -566,25 +557,6 @@ class WindowStateStore:
         new_mode = modes[(idx + 1) % len(modes)]
         self.set_notification_mode(window_id, new_mode)
         return new_mode
-
-    # ------------------------------------------------------------------
-    # Approval mode
-    # ------------------------------------------------------------------
-
-    def get_approval_mode(self, window_id: str) -> str:
-        """Get approval mode for a window (default: 'normal')."""
-        state = self.window_states.get(window_id)
-        mode = state.approval_mode if state else DEFAULT_APPROVAL_MODE
-        return mode if mode in APPROVAL_MODES else DEFAULT_APPROVAL_MODE
-
-    def set_window_approval_mode(self, window_id: str, mode: str) -> None:
-        """Set approval mode for a window."""
-        normalized = mode.lower()
-        if normalized not in APPROVAL_MODES:
-            raise ValueError(f"Invalid approval mode: {mode!r}")
-        state = self.get_window_state(window_id)
-        state.approval_mode = normalized
-        self._schedule_save()
 
     # ------------------------------------------------------------------
     # Batch mode

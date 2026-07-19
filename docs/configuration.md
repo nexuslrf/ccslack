@@ -76,8 +76,8 @@ events instead of opening Socket Mode, so it runs without it.
 > discovers a session by scanning its SQLite chat store
 > (`~/.cursor/chats/<md5(cwd)>/<agentId>/store.db`) and tails it for replies, so
 > there is **no `ccslack hook --install` step** for Cursor. Cursor's in-TUI
-> permission prompts aren't parsed yet, so for unattended use launch with YOLO
-> (`--force`, via the `new` modal's YOLO checkbox or `/ccslack yolo`).
+> permission prompts aren't parsed yet, so for unattended use relaunch it with
+> `--force` yourself (`/ccslack relaunch --force`).
 
 ### Polling + monitor cadence
 

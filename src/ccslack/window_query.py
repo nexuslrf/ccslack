@@ -6,7 +6,7 @@ state can import from here instead of ``session``, reducing their coupling
 surface from the full ``SessionManager`` singleton to a set of narrow query
 functions that depend only on ``window_state_store`` and ``config``.
 
-Write operations (``set_window_provider``, ``set_window_approval_mode``, etc.)
+Write operations (``set_window_provider``, ``set_notification_mode``, etc.)
 remain on ``SessionManager`` — only modules that genuinely mutate state should
 import it.
 """
@@ -17,9 +17,7 @@ from pathlib import Path
 
 from .config import config
 from .window_state_store import (
-    APPROVAL_MODES,
     BATCH_MODES,
-    DEFAULT_APPROVAL_MODE,
     DEFAULT_BATCH_MODE,
     DEFAULT_COMMENTARY_VISIBILITY,
     DEFAULT_INPUT_MODE,
@@ -41,7 +39,6 @@ def view_window(window_id: str) -> WindowView | None:
         window_id=window_id,
         cwd=ws.cwd or "",
         provider_name=ws.provider_name,
-        approval_mode=ws.approval_mode,
         notification_mode=ws.notification_mode,
         batch_mode=ws.batch_mode,
         tool_call_visibility=ws.tool_call_visibility,
@@ -57,13 +54,6 @@ def get_window_provider(window_id: str) -> str | None:
     """Return the provider name for a window, or None if not set."""
     state = window_store.window_states.get(window_id)
     return state.provider_name if state else None
-
-
-def get_approval_mode(window_id: str) -> str:
-    """Get approval mode for a window (default: 'normal')."""
-    state = window_store.window_states.get(window_id)
-    mode = state.approval_mode if state else DEFAULT_APPROVAL_MODE
-    return mode if mode in APPROVAL_MODES else DEFAULT_APPROVAL_MODE
 
 
 def get_notification_mode(window_id: str) -> str:

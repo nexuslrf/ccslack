@@ -18,9 +18,9 @@ def _checkbox_values(view: dict) -> set[str]:
     return values
 
 
-def test_modal_offers_worktree_and_yolo():
+def test_modal_offers_worktree_only():
     view = build_new_session_view(default_provider="claude", private_metadata="C0META")
-    assert _checkbox_values(view) == {"worktree", "yolo"}
+    assert _checkbox_values(view) == {"worktree"}
 
 
 def test_modal_defaults_unknown_provider_to_claude():
@@ -61,10 +61,9 @@ def test_build_new_text_roundtrips_flags():
         provider="codex",
         want_worktree=True,
         branch="feat-x",
-        want_yolo=True,
         host="gpu1",
     )
-    assert text == "new '/p ath' codex --worktree feat-x --yolo --host gpu1"
+    assert text == "new '/p ath' codex --worktree feat-x --host gpu1"
 
 
 @pytest.mark.asyncio
@@ -91,7 +90,6 @@ async def test_forward_new_sends_synthetic_command(monkeypatch):
         provider="codex",
         want_worktree=False,
         branch=None,
-        want_yolo=False,
         host="gpu1",
     )
 
@@ -123,7 +121,6 @@ async def test_forward_new_reports_unreachable_host(monkeypatch):
         provider="codex",
         want_worktree=False,
         branch=None,
-        want_yolo=False,
         host="ghost",
     )
 

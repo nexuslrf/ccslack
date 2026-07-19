@@ -26,22 +26,6 @@ from ccslack.providers.registry import ProviderRegistry, UnknownProviderError, r
 
 logger = structlog.get_logger()
 
-# Launch-mode constants for per-session approval behavior.
-_APPROVAL_MODE_NORMAL = "normal"
-_APPROVAL_MODE_YOLO = "yolo"
-_YOLO_FLAGS: dict[str, str] = {
-    "claude": "--dangerously-skip-permissions",
-    "codex": "--dangerously-bypass-approvals-and-sandbox",
-    "gemini": "--yolo",
-    "cursor": "--force",
-}
-
-
-def has_yolo_mode(provider_name: str) -> bool:
-    """Return True if the provider supports YOLO (permissive) launch mode."""
-    return provider_name in _YOLO_FLAGS
-
-
 # Singleton cache
 _active: AgentProvider | None = None
 
@@ -261,16 +245,15 @@ async def detect_provider_from_pane(
     return ""
 
 
-def resolve_launch_command(
-    provider_name: str, *, approval_mode: str = _APPROVAL_MODE_NORMAL
-) -> str:
-    """Resolve launch command for a provider, with optional approval mode.
+def resolve_launch_command(provider_name: str) -> str:
+    """Resolve the launch command for a provider.
 
     Resolution: ``CCSLACK_<NAME>_COMMAND`` (e.g. ``CCSLACK_CLAUDE_COMMAND``) if set,
     otherwise the provider's hardcoded default (``capabilities.launch_command``).
     Falls back to legacy ``CCBOT_<NAME>_COMMAND`` env var.
-    When ``approval_mode`` is ``"yolo"``, appends the provider-specific
-    permissive-mode flag unless it is already present.
+
+    ccslack never adds skip-approvals/sandbox-bypass flags itself — those are a
+    deliberate, manual choice (pass them explicitly via ``/ccslack relaunch``).
     """
     _ensure_registered()
     provider = provider_name.lower()
@@ -299,13 +282,7 @@ def resolve_launch_command(
 
         command = build_hardened_gemini_launch_command(command)
 
-    if approval_mode.lower() != _APPROVAL_MODE_YOLO:
-        return command
-
-    yolo_flag = _YOLO_FLAGS.get(provider)
-    if not yolo_flag or yolo_flag in command:
-        return command
-    return f"{command} {yolo_flag}"
+    return command
 
 
 def resolve_capabilities(provider_name: str | None = None) -> ProviderCapabilities:
@@ -348,7 +325,6 @@ __all__ = [
     "detect_provider_from_runtime",
     "get_provider",
     "get_provider_for_window",
-    "has_yolo_mode",
     "registry",
     "resolve_capabilities",
     "resolve_launch_command",

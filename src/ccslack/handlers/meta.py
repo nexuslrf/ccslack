@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from slack_sdk.errors import SlackApiError
 
 from ..config import config
-from ..providers import has_yolo_mode, resolve_launch_command
+from ..providers import resolve_launch_command
 from ..session import session_manager
 from ..slack_client import BoltSlackClient
 from ..thread_router import thread_router
@@ -190,7 +190,6 @@ async def _post_ephemeral(client_method, **kwargs: Any) -> None:
 def register(app: AsyncApp) -> None:
     """Wire the configured slash command (``config.slash_command``)."""
     register_dashboard_actions(app)
-    register_yolo_actions(app)
     register_relaunch_actions(app)
     register_join_actions(app)
 
@@ -236,7 +235,6 @@ def register(app: AsyncApp) -> None:
             "rename",
             "toolcalls",
             "thread",
-            "yolo",
             "relaunch",
             "manual",
             "run",
@@ -386,10 +384,6 @@ def register(app: AsyncApp) -> None:
             await _handle_thread(client, channel_id, user_id, args)
             return
 
-        if sub == "yolo":
-            await _handle_yolo(client, channel_id, user_id, args)
-            return
-
         if sub == "relaunch":
             await _handle_relaunch(client, channel_id, user_id, args)
             return
@@ -418,12 +412,10 @@ def _help_text() -> str:
     slash = config.slash_command
     return (
         "*ccslack commands*\n"
-        f"• `{slash} new <directory> [provider] [--worktree [branch]] [--yolo] "
+        f"• `{slash} new <directory> [provider] [--worktree [branch]] "
         "[--host <name>]` — start a new session.\n"
-        "    provider ∈ {claude, codex, gemini, pi, shell}; default: "
+        "    provider ∈ {claude, codex, gemini, pi, shell, cursor}; default: "
         f"`{config.provider_name}`.\n"
-        "    `--yolo` launches claude/codex/gemini with approvals skipped "
-        "(dangerous).\n"
         "    `--host <name>` runs the session on a specific fleet host "
         "(multi-host router).\n"
         f"• `{slash} list` — quick list of active sessions.\n"
@@ -435,9 +427,6 @@ def _help_text() -> str:
         "(after reboot / tmux restart).\n"
         f"• `{slash} panes` — list all tmux panes for this session.\n"
         f"• `{slash} rename <new-name>` — rename this session's Slack channel.\n"
-        f"• `{slash} yolo [on|off]` — Ctrl-C the running agent and restart it "
-        "with approvals/sandbox skipped (`on`, default) or required again "
-        "(`off`) — claude/codex/gemini only.\n"
         f"• `{slash} relaunch [--fresh] [args…]` — Ctrl-C the running agent and "
         "restart it with your own custom CLI args (continues the session; "
         "`--fresh` starts clean).\n"
@@ -491,9 +480,8 @@ async def _handle_new(
         )
         return
 
-    # Parse optional --worktree [branch-name], --yolo, and --host <name> flags.
+    # Parse optional --worktree [branch-name] and --host <name> flags.
     want_worktree = False
-    want_yolo = False
     worktree_branch: str | None = None
     want_host: str | None = None
     cleaned: list[str] = []
@@ -507,8 +495,6 @@ async def _handle_new(
                 worktree_branch = nxt
                 i += 2
                 continue
-        elif a in ("--yolo", "--dangerous"):
-            want_yolo = True
         elif a == "--host":
             nxt = args[i + 1] if i + 1 < len(args) else ""
             if nxt and not nxt.startswith("-"):
@@ -547,7 +533,7 @@ async def _handle_new(
             user=user_id,
             text=(
                 "ccslack: usage `/ccslack new <directory> [provider] "
-                "[--worktree [branch]] [--yolo]`"
+                "[--worktree [branch]]`"
             ),
         )
         return
@@ -565,21 +551,6 @@ async def _handle_new(
             ),
         )
         return
-
-    # YOLO (permissive launch) is only meaningful for agents that expose a
-    # skip-approvals flag. Requesting it for shell/pi is a no-op — warn and
-    # fall back to a normal launch rather than silently dropping intent.
-    if want_yolo and not has_yolo_mode(provider):
-        want_yolo = False
-        await _post_ephemeral(
-            client.chat_postEphemeral,
-            channel=channel_id,
-            user=user_id,
-            text=(
-                f"ccslack: `--yolo` ignored — `{provider}` has no permissive "
-                "launch mode (supported: claude, codex, gemini)."
-            ),
-        )
 
     work_dir = Path(raw_dir).expanduser()
     try:
@@ -656,11 +627,8 @@ async def _handle_new(
             created_worktree_branch = branch
 
     # Spawn tmux window first — fail fast if tmux isn't reachable.
-    approval_mode = "yolo" if want_yolo else "normal"
     launch_command = (
-        None
-        if provider == "shell"
-        else resolve_launch_command(provider, approval_mode=approval_mode)
+        None if provider == "shell" else resolve_launch_command(provider)
     )
     success, message, window_name, window_id = await tmux_manager.create_window(
         work_dir=str(spawn_dir),
@@ -762,30 +730,22 @@ async def _handle_new(
     )
 
     # Announce in both channels.
-    yolo_suffix = "  :warning: *YOLO*" if want_yolo else ""
     await _post_ephemeral(
         client.chat_postEphemeral,
         channel=channel_id,
         user=user_id,
         text=(
             f"ccslack: started <#{new_channel}> · `{provider}` · "
-            f"tmux `{window_id}` ({work_dir}){yolo_suffix}"
+            f"tmux `{window_id}` ({work_dir})"
         ),
     )
     try:
-        yolo_line = (
-            "\n:warning: *YOLO mode* — the agent runs with approvals/sandbox "
-            "skipped. It can edit files and run commands without asking."
-            if want_yolo
-            else ""
-        )
         await bolt_client.chat_postMessage(
             channel=new_channel,
             text=(
                 f":sparkles: Session ready — `{provider}` in `{work_dir}`.\n"
                 f"tmux window `{window_id}` ({window_name}). "
                 "Type a message to send it to the agent."
-                f"{yolo_line}"
             ),
         )
     except SlackApiError:
@@ -2235,250 +2195,6 @@ async def _handle_sessions(client, channel_id: str, user_id: str) -> None:  # no
     )
 
 
-# `/ccslack yolo [on|off]` argument aliases. Default (no arg) is "on".
-_YOLO_ON_ALIASES = frozenset({"", "on", "yolo", "skip"})
-_YOLO_OFF_ALIASES = frozenset({"off", "normal", "safe", "no"})
-
-
-def _yolo_launch_cmd(provider: str, target_mode: str, session_id: str) -> str:
-    """Build the relaunch command for switching *provider* to *target_mode*.
-
-    ``target_mode`` is ``"yolo"`` (skip-approvals flags) or ``"normal"``. The
-    provider's ``--continue`` args are appended so the restart resumes the same
-    conversation.
-    """
-    from .recovery import _build_launch_args_for
-
-    launch_cmd = resolve_launch_command(provider, approval_mode=target_mode)
-    continue_args = _build_launch_args_for(provider, session_id, "continue")
-    return f"{launch_cmd} {continue_args}".strip() if continue_args else launch_cmd
-
-
-async def _handle_yolo(
-    client,  # noqa: ANN001
-    channel_id: str,
-    user_id: str,
-    args: list[str],
-) -> None:
-    """``/ccslack yolo [on|off]`` — restart the agent in YOLO or normal mode.
-
-    No arg / ``on`` switches to YOLO (skip-approvals); ``off`` / ``normal``
-    switches back to approvals-required. Sends a confirm message; the actual
-    Ctrl-C + relaunch happens on the ``ccslack_yolo_confirm`` button click.
-    """
-    arg = args[0].lower() if args else ""
-    if arg in _YOLO_OFF_ALIASES:
-        target_mode = "normal"
-    elif arg in _YOLO_ON_ALIASES:
-        target_mode = "yolo"
-    else:
-        await _post_ephemeral(
-            client.chat_postEphemeral,
-            channel=channel_id,
-            user=user_id,
-            text=f"ccslack: usage `{config.slash_command} yolo [on|off]`.",
-        )
-        return
-
-    window_id = thread_router.get_window_for_channel(channel_id)
-    if window_id is None:
-        await _post_ephemeral(
-            client.chat_postEphemeral,
-            channel=channel_id,
-            user=user_id,
-            text="ccslack: `yolo` only works inside a bound session channel.",
-        )
-        return
-
-    live = await tmux_manager.find_window_by_id(window_id)
-    if live is None:
-        await _post_ephemeral(
-            client.chat_postEphemeral,
-            channel=channel_id,
-            user=user_id,
-            text="ccslack: the session window is dead — use `/ccslack restore` first.",
-        )
-        return
-
-    view = session_manager.view_window(window_id)
-    provider = (view.provider_name if view else "") or config.provider_name
-
-    if target_mode == "yolo" and not has_yolo_mode(provider):
-        await _post_ephemeral(
-            client.chat_postEphemeral,
-            channel=channel_id,
-            user=user_id,
-            text=f"ccslack: `{provider}` doesn't have a YOLO/skip-approvals mode.",
-        )
-        return
-
-    # Intentionally NOT gated on view.approval_mode: that flag is ccslack's
-    # persisted belief and drifts from reality whenever the agent is restarted
-    # outside this flow, so it can't be trusted. The action is explicit and
-    # confirmed below, and re-running it is an idempotent restart.
-
-    # Build the command preview so the user can see exactly what will run.
-    full_cmd = _yolo_launch_cmd(
-        provider, target_mode, (view.session_id or "") if view else ""
-    )
-
-    if target_mode == "yolo":
-        header = (
-            f":warning: *Switch to YOLO mode?*\n"
-            f"This will `Ctrl-C` the running `{provider}` process and restart it "
-            f"as:\n```{full_cmd}```\n"
-            "The agent will run with approvals/sandbox skipped."
-        )
-        fallback = f":warning: Switch `{provider}` to YOLO mode?"
-        confirm_text = ":zap: Confirm YOLO"
-        confirm_style = "danger"
-    else:
-        header = (
-            f":lock: *Switch back to normal mode?*\n"
-            f"This will `Ctrl-C` the running `{provider}` process and restart it "
-            f"as:\n```{full_cmd}```\n"
-            "The agent will require approvals again."
-        )
-        fallback = f":lock: Switch `{provider}` to normal mode?"
-        confirm_text = ":lock: Confirm normal"
-        confirm_style = "primary"
-
-    await client.chat_postMessage(
-        channel=channel_id,
-        text=fallback,
-        blocks=[
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": header},
-            },
-            {
-                "type": "actions",
-                "block_id": f"ccslack_yolo_actions:{window_id}",
-                "elements": [
-                    {
-                        "type": "button",
-                        "action_id": "ccslack_yolo_confirm",
-                        "style": confirm_style,
-                        "text": {"type": "plain_text", "text": confirm_text},
-                        # Value encodes the target mode so the confirm handler
-                        # knows which way to switch.
-                        "value": f"{window_id}|{target_mode}",
-                    },
-                    {
-                        "type": "button",
-                        "action_id": "ccslack_yolo_cancel",
-                        "text": {"type": "plain_text", "text": "Cancel"},
-                        "value": window_id,
-                    },
-                ],
-            },
-        ],
-    )
-
-
-def register_yolo_actions(app) -> None:  # noqa: ANN001
-    """Wire the YOLO confirm / cancel button actions."""
-
-    @app.action("ccslack_yolo_confirm")
-    async def on_yolo_confirm(ack, body, client) -> None:  # noqa: ANN001
-        await ack()
-        user_id = body.get("user", {}).get("id", "")
-        channel_id = body.get("channel", {}).get("id", "")
-        message_ts = (body.get("message") or {}).get("ts", "")
-
-        from .auth import is_authorized
-
-        if not is_authorized(user_id, channel_id):
-            return
-
-        raw_value = ""
-        for action in body.get("actions", []) or []:
-            if action.get("action_id") == "ccslack_yolo_confirm":
-                raw_value = action.get("value", "")
-                break
-        # Value is "<window_id>|<target_mode>"; older messages carry just the id.
-        window_id, _, mode_part = raw_value.partition("|")
-        target_mode = "normal" if mode_part == "normal" else "yolo"
-        if not window_id:
-            return
-
-        live = await tmux_manager.find_window_by_id(window_id)
-        if live is None:
-            if message_ts and channel_id:
-                await client.chat_update(
-                    channel=channel_id,
-                    ts=message_ts,
-                    text="ccslack: window died before the mode switch.",
-                    blocks=[],
-                )
-            return
-
-        view = session_manager.view_window(window_id)
-        provider = (view.provider_name if view else "") or config.provider_name
-        mode_label = "YOLO" if target_mode == "yolo" else "normal"
-
-        full_cmd = _yolo_launch_cmd(
-            provider, target_mode, (view.session_id or "") if view else ""
-        )
-
-        # Exit the current agent process. A single Ctrl-C only interrupts the
-        # running task — Claude/Codex keep their REPL up and need another
-        # Ctrl-C to quit — so press until the pane is actually back at a shell.
-        # Otherwise the launch command below would be typed into the agent.
-        exited = await tmux_manager.interrupt_agent_to_shell(window_id)
-        if not exited:
-            if message_ts and channel_id:
-                await client.chat_update(
-                    channel=channel_id,
-                    ts=message_ts,
-                    text=(
-                        f":warning: Couldn't exit the running `{provider}` "
-                        f"session (it ignored repeated Ctrl-C). {mode_label} "
-                        "switch aborted — try `/ccslack kill` then "
-                        "`/ccslack restore`."
-                    ),
-                    blocks=[],
-                )
-            return
-        # Relaunch with the target mode + continue flags in the same tmux window.
-        await tmux_manager.send_keys(window_id, full_cmd, literal=False, enter=True)
-
-        session_manager.set_window_approval_mode(window_id, target_mode)
-
-        if message_ts and channel_id:
-            badge = ":zap:" if target_mode == "yolo" else ":lock:"
-            verb = "activated" if target_mode == "yolo" else "restored"
-            await client.chat_update(
-                channel=channel_id,
-                ts=message_ts,
-                text=(
-                    f"{badge} *{mode_label} mode {verb}* — restarted "
-                    f"`{provider}` as `{full_cmd}`."
-                ),
-                blocks=[],
-            )
-
-        # Refresh the pinned status message to reflect the new mode.
-        # Lazy: status helpers pull session_manager.
-        from .status import update_status
-
-        bolt_client = BoltSlackClient(client)
-        await update_status(bolt_client, channel_id, window_id, "idle")
-
-    @app.action("ccslack_yolo_cancel")
-    async def on_yolo_cancel(ack, body, client) -> None:  # noqa: ANN001
-        await ack()
-        channel_id = body.get("channel", {}).get("id", "")
-        message_ts = (body.get("message") or {}).get("ts", "")
-        if message_ts and channel_id:
-            await client.chat_update(
-                channel=channel_id,
-                ts=message_ts,
-                text=":x: Mode switch cancelled.",
-                blocks=[],
-            )
-
-
 # Pending relaunch specs (window_id → exact command to run), set when the
 # confirm message is posted and consumed on the button click. In-memory only:
 # a bot restart drops pending confirmations, which is fine — the user re-runs.
@@ -2512,10 +2228,11 @@ async def _handle_relaunch(
 ) -> None:
     """``/ccslack relaunch [--fresh] [extra cli args…]`` — restart this agent.
 
-    Like ``yolo`` but with *arbitrary* launch flags instead of the fixed
-    skip-approvals flag: ``Ctrl-C`` the running agent and relaunch it with the
-    provider's base command + the user's custom args, continuing the same
-    conversation (``--fresh`` starts a clean session). The actual restart runs
+    ``Ctrl-C`` the running agent and relaunch it with the provider's base
+    command plus the user's *arbitrary* custom args, continuing the same
+    conversation (``--fresh`` starts a clean session). This is the deliberate,
+    explicit way to pass permissive flags (e.g. skip-approvals) — ccslack never
+    sets them for you. The actual restart runs
     on the confirm button so the user first sees the exact command.
     """
     fresh = False
@@ -2760,7 +2477,6 @@ async def create_session(
     provider: str,
     want_worktree: bool,
     worktree_branch: str | None,
-    want_yolo: bool = False,
 ) -> None:
     """Public entry point shared by ``_handle_new`` (slash) and the modal.
 
@@ -2772,8 +2488,6 @@ async def create_session(
         args.append("--worktree")
         if worktree_branch:
             args.append(worktree_branch)
-    if want_yolo:
-        args.append("--yolo")
     await _handle_new(client, meta_channel_id, user_id, args)
 
 
@@ -2781,5 +2495,4 @@ __all__ = [
     "create_session",
     "register",
     "register_dashboard_actions",
-    "register_yolo_actions",
 ]

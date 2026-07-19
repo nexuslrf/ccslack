@@ -130,13 +130,6 @@ def build_new_session_view(
                             },
                             "value": "worktree",
                         },
-                        {
-                            "text": {
-                                "type": "plain_text",
-                                "text": "YOLO — skip approvals (claude/codex/gemini/cursor)",
-                            },
-                            "value": "yolo",
-                        },
                     ],
                 },
             },
@@ -197,7 +190,6 @@ def register(app: AsyncApp) -> None:
         )
         selected_values = {o.get("value") for o in wt_selected}
         want_worktree = "worktree" in selected_values
-        want_yolo = "yolo" in selected_values
         branch = (
             state_values.get("branch_block", {}).get("branch", {}).get("value") or ""
         ).strip() or None
@@ -231,7 +223,6 @@ def register(app: AsyncApp) -> None:
                 provider=provider,
                 want_worktree=want_worktree,
                 branch=branch,
-                want_yolo=want_yolo,
                 host=host,
             )
             return
@@ -247,7 +238,6 @@ def register(app: AsyncApp) -> None:
             provider=provider,
             want_worktree=want_worktree,
             worktree_branch=branch,
-            want_yolo=want_yolo,
         )
 
 
@@ -257,7 +247,6 @@ def _build_new_text(
     provider: str,
     want_worktree: bool,
     branch: str | None,
-    want_yolo: bool,
     host: str,
 ) -> str:
     """Reconstruct the ``new …`` slash text (CLI form) for forwarding to a worker."""
@@ -268,8 +257,6 @@ def _build_new_text(
         parts.append("--worktree")
         if branch:
             parts.append(shlex.quote(branch))
-    if want_yolo:
-        parts.append("--yolo")
     parts += ["--host", host]
     return " ".join(parts)
 
@@ -283,7 +270,6 @@ async def _forward_new(
     provider: str,
     want_worktree: bool,
     branch: str | None,
-    want_yolo: bool,
     host: str,
 ) -> None:
     """Forward a synthetic ``/ccslack new … --host <host>`` to the chosen worker."""
@@ -296,7 +282,6 @@ async def _forward_new(
             provider=provider,
             want_worktree=want_worktree,
             branch=branch,
-            want_yolo=want_yolo,
             host=host,
         ),
         "channel_id": meta_channel,

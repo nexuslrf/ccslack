@@ -37,9 +37,7 @@ from .user_preferences import (
 from .window_resolver import EMDASH_SESSION_PREFIX, is_foreign_window, is_window_id
 from .window_view import WindowView
 from .window_state_store import (
-    APPROVAL_MODES,
     BATCH_MODES,
-    DEFAULT_APPROVAL_MODE,
     DEFAULT_BATCH_MODE,
     NOTIFICATION_MODES,
     WindowState,
@@ -396,7 +394,6 @@ class SessionManager:
             window_id=window_id,
             cwd=ws.cwd or "",
             provider_name=ws.provider_name,
-            approval_mode=ws.approval_mode,
             notification_mode=ws.notification_mode,
             batch_mode=ws.batch_mode,
             tool_call_visibility=ws.tool_call_visibility,
@@ -460,20 +457,7 @@ class SessionManager:
         state.worktree_branch = branch
         self._save_state()
 
-    # --- Approval / notification / batch / tool-call cycling (provider-agnostic) ---
-
-    def get_approval_mode(self, window_id: str) -> str:
-        state = self.window_states.get(window_id)
-        mode = state.approval_mode if state else DEFAULT_APPROVAL_MODE
-        return mode if mode in APPROVAL_MODES else DEFAULT_APPROVAL_MODE
-
-    def set_window_approval_mode(self, window_id: str, mode: str) -> None:
-        normalized = mode.lower()
-        if normalized not in APPROVAL_MODES:
-            raise ValueError(f"Invalid approval mode: {mode!r}")
-        state = window_store.get_window_state(window_id)
-        state.approval_mode = normalized
-        self._save_state()
+    # --- Notification / batch / tool-call cycling (provider-agnostic) ---
 
     _NOTIFICATION_MODES = NOTIFICATION_MODES
 

@@ -19,12 +19,11 @@ Create a new session.
 
 | Form | Behaviour |
 |---|---|
-| `/ccslack new` | Opens a Block Kit modal — directory text input, provider radio, "create fresh git worktree" + "YOLO" checkboxes + optional branch name |
+| `/ccslack new` | Opens a Block Kit modal — directory text input, provider radio, "create fresh git worktree" checkbox + optional branch name |
 | `/ccslack new <dir>` | Default provider in `<dir>` |
 | `/ccslack new <dir> <provider>` | `provider` ∈ `claude` `codex` `gemini` `pi` `shell` `cursor` |
 | `/ccslack new <dir> claude --worktree` | Spawns a fresh `git worktree` (auto-named `ccg/<slug>`) and uses *that* path as the session cwd |
 | `/ccslack new <dir> claude --worktree feature-x` | Same but with a named branch |
-| `/ccslack new <dir> codex --yolo` | Launches the agent with approvals/sandbox **skipped** — see YOLO below |
 | `/ccslack new <dir> --host gpu1` | Runs the session on a specific fleet host (multi-host router) — see below |
 
 #### `--host` (multi-host)
@@ -34,22 +33,11 @@ specific worker; omit it to use the router's own host. A name that isn't a
 connected host is rejected with the available host list. No-op (single host)
 without a router. The no-arg modal form always targets the router host.
 
-#### YOLO (permissive launch)
-
-`--yolo` (alias `--dangerous`, or the modal checkbox) starts the agent with
-its skip-approvals flag so it edits files and runs commands without asking:
-
-| Provider | Flag appended |
-|---|---|
-| `claude` | `--dangerously-skip-permissions` |
-| `codex` | `--dangerously-bypass-approvals-and-sandbox` |
-| `gemini` | `--yolo` |
-| `cursor` | `--force` |
-
-It's a no-op for `pi` / `shell` (no such mode) — the request is ignored with
-an ephemeral warning. YOLO sessions are flagged with a :warning: in the
-start announcement and the channel's welcome message. Combine freely with
-`--worktree` to keep an autonomous agent boxed into a throwaway branch.
+> **No YOLO shortcut.** ccslack deliberately has *no* one-click permissive
+> mode — agents launch with approvals **on**. Skip-approvals/sandbox flags are
+> a manual choice: pass them explicitly to an existing session via
+> [`/ccslack relaunch`](#-ccslack-relaunch---fresh-args) (e.g.
+> `/ccslack relaunch --dangerously-skip-permissions`).
 
 **Where it works**: meta channel only.
 **Auth**: `ALLOWED_USERS`.
@@ -299,41 +287,24 @@ place — inside the thread.
 - **Where**: a bound session channel.
 - **Auth**: channel membership.
 
-### `/ccslack yolo [on|off]`
-
-Switch the **running** agent between normal and YOLO (skip-approvals) mode
-without losing context — distinct from `/ccslack new --yolo`, which only sets
-the mode at creation.
-
-| Form | Behaviour |
-|---|---|
-| `/ccslack yolo` / `yolo on` | Restart in YOLO (approvals/sandbox skipped). |
-| `/ccslack yolo off` (alias `normal`) | Restart with approvals required again. |
-
-Posts a confirm message; on click it Ctrl-C's the agent until the pane is
-back at a shell, then relaunches it with the target mode's launch flags plus
-`--continue` (so the conversation resumes). If the agent ignores repeated
-Ctrl-C the switch is aborted with a hint to `kill` + `restore`. Switching
-*to* YOLO needs a YOLO-capable provider (claude/codex/gemini/cursor); switching
-to normal works for any provider.
-
 ### `/ccslack relaunch [--fresh] [args…]`
 
-Restart the **running** agent with *arbitrary* custom CLI args — the flexible
-cousin of `yolo` (which only toggles the fixed skip-approvals flag). Everything
-after `relaunch` is passed straight to the agent's launch command.
+Restart the **running** agent with *arbitrary* custom CLI args, without losing
+context. Everything after `relaunch` is passed straight to the agent's launch
+command. This is also the **only** way to enable a permissive/skip-approvals
+mode — deliberately, by typing the flag yourself (ccslack has no yolo shortcut):
 
 | Form | Result (provider `claude`) |
 |---|---|
 | `/ccslack relaunch --model opus` | `claude --continue --model opus` |
 | `/ccslack relaunch --fresh --model opus` | `claude --model opus` (new session) |
-| `/ccslack relaunch --append-system-prompt "be terse"` | `claude --continue --append-system-prompt 'be terse'` |
+| `/ccslack relaunch --dangerously-skip-permissions` | `claude --continue --dangerously-skip-permissions` |
 
-Same mechanics as `yolo`: posts a confirm with the exact command, then on click
-Ctrl-C's the agent back to a shell and relaunches it. The session **continues**
-by default (`--fresh` starts clean). Custom args are `shlex`-quoted, so
-multi-word values survive and shell metacharacters become literal arguments to
-the agent (never the shell). Works for any provider.
+Posts a confirm with the exact command, then on click Ctrl-C's the agent back
+to a shell and relaunches it. The session **continues** by default (`--fresh`
+starts clean). Custom args are `shlex`-quoted, so multi-word values survive and
+shell metacharacters become literal arguments to the agent (never the shell).
+Works for any provider.
 
 - **Where**: a bound session channel.
 - **Auth**: channel membership.
@@ -681,7 +652,7 @@ it.
 | Dashboard 🗑️ Kill button | `ALLOWED_USERS` |
 | `/ccslack kill --all`, kill by `<#channel>` / `C…` / `@N` | `ALLOWED_USERS` |
 | `/ccslack kill` (from session channel) | Channel membership |
-| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `yolo`, `relaunch`, `manual`, `run`, `commentary`, `chat`, `users`, `purge`, `autopurge` | Channel membership* |
+| `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `relaunch`, `manual`, `run`, `commentary`, `chat`, `users`, `purge`, `autopurge` | Channel membership* |
 | `/ccslack here` (bind current channel) | `ALLOWED_USERS` |
 | `/ccslack adduser`, `removeuser` | `ALLOWED_USERS` |
 | `/ccslack send` outside the cwd | `ALLOWED_USERS` (on top of channel membership) |

@@ -24,7 +24,6 @@ class WindowView:
     window_id: str
     cwd: str
     provider_name: str
-    approval_mode: str
     notification_mode: str
     batch_mode: str
     tool_call_visibility: str

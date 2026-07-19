@@ -35,7 +35,6 @@ the per-feature Telegram → Slack mapping table.
 | 🛑 `/ccslack kill` | Kill the current session, a specific session, or `--all --confirm` everything |
 | 💀 Recovery banner | When a window dies, a banner with Fresh / Continue / Resume / Archive buttons appears in the bound channel |
 | 🔕 `/ccslack mute` | Per-channel notification mode: `all` / `errors` / `off` / `silent` (chatter suppressed but prompts that need you still show; un-muting flushes the last missed answer) |
-| ⚡ `/ccslack yolo [on\|off]` | Switch the running agent in/out of skip-approvals mode without losing context |
 | 🔄 `/ccslack relaunch [--fresh] [args…]` | Restart the running agent with your own custom CLI args (continues the session by default) |
 | 💬 `/ccslack chat` | Start a human-only thread in the channel — replies in it are not forwarded to the agent |
 | ✋ `/ccslack manual [on\|off]` | Human-first channel: plain messages stay as chat; drive the agent by @-mentioning the bot or `/ccslack run` (complementary) |
