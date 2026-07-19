@@ -253,9 +253,14 @@ your input always still forwards **into** the tmux session.
 | `all` (default) | Every transcript message posts |
 | `errors` (alias `errors_only`) | Only error-like content + tool flows post |
 | `off` (alias `muted`) | Plain text suppressed; tool flows still post so the agent can progress |
-| `silent` (aliases `quiet` `none` `deaf`) | **Nothing** posts back — not text, tool flows, or the live picker; only the status pill updates. Send commands in, watch execution via [`/toolbar`](#-toolbar) + [`/screenshot`](#-screenshot). |
+| `silent` (aliases `quiet` `none` `deaf`) | Chatter (text + tool flows) is suppressed and only the status pill updates — but a **prompt that needs your input still shows** (the live picker), so the agent never gets stuck waiting. Otherwise watch execution via [`/toolbar`](#-toolbar) + [`/screenshot`](#-screenshot). |
 
 No arg cycles through the four modes (`all → errors → off → silent → all`).
+
+**Resuming** is lossless-ish: raising the mode back up (e.g. `silent → all`)
+**flushes the last answer that was suppressed** while muted, so posting visibly
+resumes instead of waiting for the next turn. (Only the most recent answer is
+kept; use [`/ccslack history`](#-ccslack-history) for the full backlog.)
 
 - **Where**: a bound session channel.
 - **Auth**: channel membership.

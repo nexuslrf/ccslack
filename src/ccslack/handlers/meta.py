@@ -1586,6 +1586,7 @@ async def _handle_mute(
         )
         return
 
+    old_mode = session_manager.get_notification_mode(window_id)
     if args:
         alias = args[0].lower()
         mode = _MUTE_ALIASES.get(alias)
@@ -1609,8 +1610,8 @@ async def _handle_mute(
         "errors_only": ":warning: *errors only* — only error-like text + tool flows",
         "muted": ":mute: *muted* — text suppressed; tool flows still post",
         "silent": (
-            ":no_bell: *silent* — nothing posts back; input still runs. "
-            "Monitor via `/toolbar` + `/screenshot`"
+            ":no_bell: *silent* — chatter suppressed; input still runs and "
+            "prompts that need you still show. Monitor via `/toolbar` + `/screenshot`"
         ),
     }
     await _post_ephemeral(
@@ -1619,6 +1620,26 @@ async def _handle_mute(
         user=user_id,
         text=f"ccslack: notify mode → {labels.get(mode, mode)}",
     )
+    # Becoming more verbose (e.g. silent → all): flush the last answer that was
+    # suppressed while muted, so posting visibly "resumes" instead of waiting
+    # for the next turn.
+    if _mute_rank(mode) < _mute_rank(old_mode):
+        from . import mute_buffer
+        from ..slack_sender import safe_post
+
+        missed = mute_buffer.take(window_id)
+        if missed:
+            await safe_post(
+                BoltSlackClient(client),
+                channel=channel_id,
+                text=f":envelope_with_arrow: _caught up (posted while muted):_\n{missed}",
+            )
+
+
+def _mute_rank(mode: str) -> int:
+    """Suppression level of a notify mode — higher = quieter (all=0 … silent=3)."""
+    order = ("all", "errors_only", "muted", "silent")
+    return order.index(mode) if mode in order else 0
 
 
 def _resolve_kill_target(raw: str, *, from_channel: str) -> tuple[str, str] | None:

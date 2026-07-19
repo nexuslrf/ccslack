@@ -136,10 +136,9 @@ async def _pre_post_suppressed(
 
     notification_mode = window_query.get_notification_mode(window_id)
 
-    if notification_mode == "silent":
-        await update_status(client, channel_id, window_id, "active")
-        return True
-
+    # Interactive prompts fire BEFORE any mute gate: the picker is how the agent
+    # gets unblocked, so suppressing it (even in `silent`) would deadlock the
+    # session — nothing would ever "resume" no matter the notify mode.
     if msg.content_type == "tool_use" and (msg.tool_name or "") in INTERACTIVE_TOOL_NAMES:
         await enter_interactive_mode(
             client,
@@ -159,6 +158,11 @@ async def _pre_post_suppressed(
         await update_status(client, channel_id, window_id, "active")
         return True
 
+    if notification_mode == "silent":
+        _buffer_suppressed_answer(window_id, msg, text)
+        await update_status(client, channel_id, window_id, "active")
+        return True
+
     if msg.content_type in (
         "tool_use",
         "tool_result",
@@ -173,10 +177,19 @@ async def _pre_post_suppressed(
             window_id,
             notification_mode,
         )
+        _buffer_suppressed_answer(window_id, msg, text)
         await update_status(client, channel_id, window_id, "active")
         return True
 
     return False
+
+
+def _buffer_suppressed_answer(window_id: str, msg: NewMessage, text: str) -> None:
+    """Stash a suppressed assistant answer so un-muting can flush it."""
+    if msg.role != "user" and msg.content_type == "text" and text.strip():
+        from .. import mute_buffer
+
+        mute_buffer.remember(window_id, text)
 
 
 async def _route_to_channel(
