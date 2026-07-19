@@ -246,14 +246,18 @@ async def _route_to_channel(
     if await _pre_post_suppressed(client, channel_id, window_id, msg, text):
         return
 
-    # Tool-call threading: route tool_use / tool_result / thinking under a
-    # per-turn thread parent in the main channel. Plain text answers stay in
-    # the main channel (thread_ts None); the parent is created lazily on the
-    # first threadable message of the turn.
+    # Tool-call threading: route the turn's workflow chain — tool_use /
+    # tool_result / thinking, plus Codex "commentary" (pre-tool-call narration)
+    # — under a per-turn thread parent in the main channel. The final answer
+    # stays flat (thread_ts None). The parent is created lazily on the first
+    # threadable message of the turn.
+    is_workflow = msg.content_type in ("tool_use", "tool_result", "thinking") or (
+        msg.phase == "commentary"
+    )
     thread_ts: str | None = None
     if (
         msg.role != "user"
-        and msg.content_type in ("tool_use", "tool_result", "thinking")
+        and is_workflow
         and window_query.is_tool_threading_enabled(window_id)
     ):
         thread_ts = await turn_threads.thread_parent_for(

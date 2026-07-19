@@ -1,10 +1,11 @@
 """Per-channel agent-turn threading for tool chains.
 
 When tool-call threading is enabled (``window_query.is_tool_threading_enabled``),
-an agent turn's noisy chain — ``tool_use`` / ``tool_result`` / ``thinking`` —
-is collapsed under a single parent message in the main channel and posted into
-its Slack thread. Plain text answers and interactive prompts stay in the main
-channel so the conversation reads cleanly.
+an agent turn's noisy chain — ``tool_use`` / ``tool_result`` / ``thinking``, plus
+Codex ``commentary`` (pre-tool-call narration) — is collapsed under a single
+parent message in the main channel and posted into its Slack thread. The final
+answer and interactive prompts stay in the main channel so the conversation
+reads cleanly.
 
 A "turn" is the activity between two boundaries:
   * starts lazily on the first threadable message after a (re)start,

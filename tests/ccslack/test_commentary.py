@@ -1,10 +1,12 @@
 import pytest
 
 from ccslack import window_query
+from ccslack.handlers.messaging_pipeline import turn_threads
 from ccslack.handlers.messaging_pipeline.message_routing import (
     _buffer_suppressed_answer,
     _decorate,
     _pre_post_suppressed,
+    handle_new_message,
 )
 from ccslack.handlers.meta import _handle_commentary
 from ccslack.handlers import mute_buffer
@@ -21,10 +23,12 @@ def _clean():
     window_store.window_states.clear()
     thread_router.reset()
     mute_buffer.reset()
+    turn_threads.reset_for_testing()
     yield
     window_store.window_states.clear()
     thread_router.reset()
     mute_buffer.reset()
+    turn_threads.reset_for_testing()
 
 
 def _bind(channel: str, window: str) -> None:
@@ -182,3 +186,51 @@ async def test_commentary_command_rejects_bad_arg():
     client = FakeSlackClient()
     await _handle_commentary(client, "C1", "U1", ["maybe"])
     assert "unknown mode" in client.last_call("chat_postEphemeral").kwargs["text"]
+
+
+# ── commentary collapses into the turn thread ──────────────────────────────
+
+
+def _routed(window: str = "@1"):
+    st = window_store.get_window_state(window)
+    st.session_id = "s1"
+
+
+@pytest.mark.asyncio
+async def test_commentary_posts_under_thread_final_answer_stays_flat():
+    _bind("C1", "@1")
+    _routed("@1")  # tool threading defaults on
+    client = FakeSlackClient()
+    client.returns["chat_postMessage"] = {"ok": True, "ts": "111.1"}
+
+    await handle_new_message(_commentary("First, checking the repo."), client)
+    await handle_new_message(_final("Here is the answer."), client)
+
+    posts = [c for c in client.calls if c.method == "chat_postMessage"]
+    parent = next(p for p in posts if "Tool activity" in (p.kwargs.get("text") or ""))
+    commentary = next(
+        p for p in posts if ":thinking_face:" in (p.kwargs.get("text") or "")
+    )
+    final = next(p for p in posts if "Here is the answer." in (p.kwargs.get("text") or ""))
+
+    assert parent.kwargs.get("thread_ts") is None  # parent is flat
+    assert commentary.kwargs.get("thread_ts") == "111.1"  # commentary threaded
+    assert final.kwargs.get("thread_ts") is None  # final answer stays flat
+
+
+@pytest.mark.asyncio
+async def test_commentary_not_threaded_when_tool_threading_off():
+    _bind("C1", "@1")
+    _routed("@1")
+    session_manager.set_thread_tool_calls("@1", "off")
+    client = FakeSlackClient()
+    client.returns["chat_postMessage"] = {"ok": True, "ts": "111.1"}
+
+    await handle_new_message(_commentary("narration"), client)
+
+    posts = [c for c in client.calls if c.method == "chat_postMessage"]
+    assert not any("Tool activity" in (p.kwargs.get("text") or "") for p in posts)
+    commentary = next(
+        p for p in posts if ":thinking_face:" in (p.kwargs.get("text") or "")
+    )
+    assert commentary.kwargs.get("thread_ts") is None  # flat

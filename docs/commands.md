@@ -274,7 +274,7 @@ Per-channel grouping of a turn's tool chain into a Slack thread.
 
 | Mode | Effect |
 |---|---|
-| `on` | A turn's `tool_use` / `tool_result` / `thinking` are posted under one threaded parent in the main channel; plain answers + interactive prompts stay in the main channel. |
+| `on` | A turn's workflow chain — `tool_use` / `tool_result` / `thinking`, plus Codex `commentary` — is posted under one threaded parent in the main channel; the final answer + interactive prompts stay in the main channel. |
 | `off` | Tool calls post flat in the channel (no thread). |
 | `default` | Defer to the global `CCSLACK_THREAD_TOOL_CALLS` env var (default `true`). |
 
@@ -344,14 +344,20 @@ Persisted per channel; survives a bot restart.
 
 Codex tags each agent message with a **phase**: `commentary` (running narration
 *before* each tool call — collapsed in the Codex TUI) vs `final_answer` (the
-actual response). By default commentary posts, prefixed with a :thinking_face:
-marker so it reads as an aside next to the unmarked final answer.
+actual response). Commentary posts prefixed with a :thinking_face: marker so it
+reads as an aside; the final answer is unmarked.
 
 | Form | Effect |
 |---|---|
 | `/ccslack commentary` | Toggle. |
 | `/ccslack commentary hide` (alias `off`) | Suppress commentary — only final answers + tool flows post. |
 | `/ccslack commentary show` (alias `on`) | Post commentary again (the default). |
+
+When [tool-call threading](#-ccslack-thread-onoffdefault) is on (the default),
+commentary is part of the turn's workflow chain, so it **collapses into the
+per-turn thread** alongside the tool calls — the main channel just shows the
+"Tool activity" parent + the final answer. Turn threading off → commentary posts
+flat.
 
 Final answers always post regardless. Per channel; persisted. Only Codex
 currently emits a commentary phase (Claude has no equivalent marker).
