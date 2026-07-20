@@ -388,6 +388,10 @@ def register(app: AsyncApp) -> None:
             await _handle_relaunch(client, channel_id, user_id, args)
             return
 
+        if sub == "revive":
+            await _handle_revive(client, channel_id, user_id, args)
+            return
+
         if sub == "manual":
             await _handle_manual(client, channel_id, user_id, args)
             return
@@ -425,6 +429,9 @@ def _help_text() -> str:
         f"• `{slash} resume` — pick a past Claude session in this channel's cwd.\n"
         f"• `{slash} restore [continue|resume|fresh]` — respawn a dead session "
         "(after reboot / tmux restart).\n"
+        f"• `{slash} revive <#channel> [continue|resume|fresh]` — bring back a "
+        "*killed* session: un-archive its channel + respawn + resume (meta "
+        "channel).\n"
         f"• `{slash} panes` — list all tmux panes for this session.\n"
         f"• `{slash} rename <new-name>` — rename this session's Slack channel.\n"
         f"• `{slash} relaunch [--fresh] [args…]` — Ctrl-C the running agent and "
@@ -1154,6 +1161,120 @@ async def _handle_restore(
             user=user_id,
             text=f"ccslack restore ({mode}): re-adopt failed (check logs).",
         )
+
+
+async def _handle_revive(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    args: list[str],
+) -> None:
+    """``/ccslack revive <#channel> [continue|resume|fresh]`` — bring back a
+    *killed* session: un-archive its channel (via the bot API — no manual Slack
+    unarchive needed), then respawn + rebind + resume its agent from the
+    channel's remembered cwd.
+
+    Run from the meta channel (you can't type in an archived channel). The agent
+    transcript survives a kill, so ``resume``/``continue`` restore the actual
+    conversation, not just the channel.
+    """
+    slash = config.slash_command
+    mode = "continue"
+    target_ref = ""
+    for token in args:
+        resolved = _RESTORE_ALIASES.get(token.lower())
+        if resolved is not None:
+            mode = resolved
+        elif token.strip():
+            target_ref = token.strip()
+
+    match = _CHANNEL_REF_RE.fullmatch(target_ref)
+    revive_channel = match.group(1) if match else ""
+    if not revive_channel:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack: usage `{slash} revive <#channel> [continue|resume|fresh]`.",
+        )
+        return
+
+    # Un-archive via the bot token — bypasses the workspace's UI unarchive
+    # restriction. Slack may still refuse (Enterprise policy / channel type); if
+    # so, report it and point at the new-session fallback.
+    already_active = False
+    try:
+        await client.conversations_unarchive(channel=revive_channel)
+    except SlackApiError as exc:
+        error = (exc.response.get("error") if exc.response else "") or str(exc)
+        if error == "not_archived":
+            already_active = True
+        else:
+            await _post_ephemeral(
+                client.chat_postEphemeral,
+                channel=channel_id,
+                user=user_id,
+                text=(
+                    f"ccslack: couldn't un-archive <#{revive_channel}> — `{error}`. "
+                    f"Your workspace may block it; recover instead with "
+                    f"`{slash} new <cwd> <provider>` then `{slash} resume`."
+                ),
+            )
+            return
+
+    # Re-adopt from the channel topic (`<provider> · <cwd>`), same core as the
+    # unbound-channel restore path.
+    from .recovery import (
+        _latest_session_id_for,
+        recover_channel_context,
+        restore_in_channel,
+    )
+
+    context = await recover_channel_context(client, revive_channel)
+    if context is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: un-archived <#{revive_channel}>, but its topic isn't a "
+                "ccslack session (`<provider> · <cwd>`), so I can't auto-respawn. "
+                f"Bind it manually with `{slash} here <cwd>` inside it."
+            ),
+        )
+        return
+
+    provider, cwd = context
+    session_id = _latest_session_id_for(provider, cwd) if mode == "resume" else ""
+    new_window_id = await restore_in_channel(
+        client,
+        revive_channel,
+        provider=provider,
+        cwd=cwd,
+        session_id=session_id,
+        mode=mode,
+        old_window_id=None,
+        announce=True,
+    )
+    if new_window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack revive ({mode}): respawn failed for <#{revive_channel}> (check logs).",
+        )
+        return
+
+    unarchived_note = "(was already active) " if already_active else ""
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=(
+            f":recycle: revived <#{revive_channel}> {unarchived_note}· `{provider}` "
+            f"in `{cwd}` (`{mode}`, {new_window_id})."
+        ),
+    )
 
 
 async def _handle_chat(

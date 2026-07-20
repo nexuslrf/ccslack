@@ -151,6 +151,33 @@ in the channel.)
 - **Auth**: channel membership (bound) / `ALLOWED_USERS` (unbound — the
   channel isn't a recognised member channel until re-adopted).
 
+### `/ccslack revive <#channel> [continue|resume|fresh]`
+
+Bring back a **killed** session — the recovery path for a mistaken
+`/ccslack kill`. Where `restore` runs *inside* a channel, `revive` is driven
+from the **meta channel** by channel reference, because `kill` **archives** the
+channel and you can't type in an archived one.
+
+It does the whole recovery in one shot:
+
+1. **Un-archives** `<#channel>` via the bot API — this bypasses a workspace that
+   disables the *Settings → Unarchive* UI (needs the bot's
+   `channels:manage` / `groups:write` scopes).
+2. Recovers `provider` + `cwd` from the channel's **topic** (`<provider> · <cwd>`).
+3. Respawns the tmux window, rebinds the channel, and resumes the agent —
+   `continue` (default) / `resume` / `fresh`, same meaning as `restore`.
+
+Because a kill only terminates the tmux process (the agent **transcript on disk
+survives**), `resume`/`continue` restore the *actual conversation*, not just an
+empty channel.
+
+If Slack refuses the un-archive (Enterprise policy / channel type), `revive`
+reports the error and points you at the fallback: `/ccslack new <cwd> <provider>`
+in a fresh channel, then `/ccslack resume`.
+
+- **Where**: the meta channel.
+- **Auth**: `ALLOWED_USERS`.
+
 ### `/ccslack panes`
 
 Ephemeral list of every tmux pane in the bound window: active marker,
@@ -657,6 +684,7 @@ it.
 | `/ccslack list`, `/ccslack sessions` | `ALLOWED_USERS` |
 | Dashboard 🗑️ Kill button | `ALLOWED_USERS` |
 | `/ccslack kill --all`, kill by `<#channel>` / `C…` / `@N` | `ALLOWED_USERS` |
+| `/ccslack revive <#channel>` | `ALLOWED_USERS` |
 | `/ccslack kill` (from session channel) | Channel membership |
 | `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `relaunch`, `manual`, `run`, `commentary`, `chat`, `users`, `purge`, `autopurge` | Channel membership* |
 | `/ccslack here` (bind current channel) | `ALLOWED_USERS` |

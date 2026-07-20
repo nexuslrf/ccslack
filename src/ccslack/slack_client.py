@@ -65,6 +65,10 @@ class SlackClient(Protocol):
         self, *, channel: str, **kwargs: Any
     ) -> AsyncSlackResponse: ...
 
+    async def conversations_unarchive(
+        self, *, channel: str, **kwargs: Any
+    ) -> AsyncSlackResponse: ...
+
     async def conversations_invite(
         self, *, channel: str, users: str, **kwargs: Any
     ) -> AsyncSlackResponse: ...
@@ -187,6 +191,11 @@ class BoltSlackClient:
         self, *, channel: str, **kwargs: Any
     ) -> AsyncSlackResponse:
         return await self._web.conversations_archive(channel=channel, **kwargs)
+
+    async def conversations_unarchive(
+        self, *, channel: str, **kwargs: Any
+    ) -> AsyncSlackResponse:
+        return await self._web.conversations_unarchive(channel=channel, **kwargs)
 
     async def conversations_invite(
         self, *, channel: str, users: str, **kwargs: Any
@@ -383,6 +392,9 @@ class FakeSlackClient:
 
     async def conversations_archive(self, *, channel: str, **kwargs: Any) -> Any:
         return self._record("conversations_archive", {"channel": channel, **kwargs})
+
+    async def conversations_unarchive(self, *, channel: str, **kwargs: Any) -> Any:
+        return self._record("conversations_unarchive", {"channel": channel, **kwargs})
 
     async def conversations_invite(
         self, *, channel: str, users: str, **kwargs: Any
