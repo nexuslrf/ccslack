@@ -33,7 +33,7 @@ the per-feature Telegram → Slack mapping table.
 | 🪟 `/ccslack panes` | Multi-pane window inspector |
 | 📤 `/ccslack send` | Upload file(s) from the session's cwd — no-arg opens an interactive file browser, or pass a path/glob/substring. Project-scoped security filters (lexical path containment, secrets, gitleaks); files ≥10 MB ask for a one-tap confirm. Meta users can reach outside the cwd |
 | 🛑 `/ccslack kill` | Kill the current session, a specific session, or `--all --confirm` everything |
-| ♻️ `/ccslack revive <#channel>` | Undo a mistaken kill: un-archive the channel (via bot API) + respawn + resume the agent (conversation survives the kill) |
+| ♻️ `/ccslack revive <channel>` | Undo a mistaken kill: un-archive the channel (via bot API) + respawn + resume the agent (conversation survives the kill) |
 | 💀 Recovery banner | When a window dies, a banner with Fresh / Continue / Resume / Archive buttons appears in the bound channel |
 | 🔕 `/ccslack mute` | Per-channel notification mode: `all` / `errors` / `off` / `silent` (chatter suppressed but prompts that need you still show; un-muting flushes the last missed answer) |
 | 🔄 `/ccslack relaunch [--fresh] [args…]` | Restart the running agent with your own custom CLI args (continues the session by default) |

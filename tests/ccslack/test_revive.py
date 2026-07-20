@@ -1,7 +1,8 @@
 import pytest
 from slack_sdk.errors import SlackApiError
 
-from ccslack.handlers.meta import _handle_revive
+from ccslack.config import config
+from ccslack.handlers.meta import _handle_revive, _resolve_channel_ref
 from ccslack.slack_client import FakeSlackClient
 from ccslack.thread_router import thread_router
 from ccslack.window_state_store import window_store
@@ -75,6 +76,58 @@ async def test_revive_requires_channel_ref():
     await _handle_revive(client, "C0META", "U1", ["resume"])
     assert client.call_count("conversations_unarchive") == 0
     assert "usage" in client.last_call("chat_postEphemeral").kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_revive_accepts_bare_channel_id(_stub_restore):
+    client = FakeSlackClient()
+    await _handle_revive(client, "C0META", "U1", ["C0DEAD1", "resume"])
+    assert client.last_call("conversations_unarchive").kwargs["channel"] == "C0DEAD1"
+    assert _stub_restore["restore"]["channel"] == "C0DEAD1"
+
+
+@pytest.mark.asyncio
+async def test_revive_resolves_archived_channel_by_name(monkeypatch, _stub_restore):
+    monkeypatch.setattr(config, "public_channels", False)
+    client = FakeSlackClient()
+    client.returns["conversations_list"] = {
+        "ok": True,
+        "channels": [
+            {"id": "C0OTHER", "name": "random"},
+            {"id": "C0KILLED", "name": "ccslack-myproj"},
+        ],
+        "response_metadata": {"next_cursor": ""},
+    }
+
+    await _handle_revive(client, "C0META", "U1", ["#ccslack-myproj", "continue"])
+
+    assert client.last_call("conversations_unarchive").kwargs["channel"] == "C0KILLED"
+    assert _stub_restore["restore"]["channel"] == "C0KILLED"
+
+
+@pytest.mark.asyncio
+async def test_revive_unknown_name_reports_id_hint():
+    client = FakeSlackClient()
+    client.returns["conversations_list"] = {
+        "ok": True,
+        "channels": [{"id": "C0OTHER", "name": "random"}],
+        "response_metadata": {"next_cursor": ""},
+    }
+
+    await _handle_revive(client, "C0META", "U1", ["nope-channel"])
+
+    assert client.call_count("conversations_unarchive") == 0
+    text = client.last_call("chat_postEphemeral").kwargs["text"]
+    assert "couldn't find" in text and "archives/C" in text
+
+
+@pytest.mark.asyncio
+async def test_resolve_channel_ref_forms(monkeypatch):
+    client = FakeSlackClient()
+    # mention + bare id resolve without any API call
+    assert await _resolve_channel_ref(client, "<#C0ABCDEF|name>") == "C0ABCDEF"
+    assert await _resolve_channel_ref(client, "C0ABCDEF") == "C0ABCDEF"
+    assert client.call_count("conversations_list") == 0
 
 
 @pytest.mark.asyncio

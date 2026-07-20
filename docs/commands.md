@@ -151,16 +151,22 @@ in the channel.)
 - **Auth**: channel membership (bound) / `ALLOWED_USERS` (unbound — the
   channel isn't a recognised member channel until re-adopted).
 
-### `/ccslack revive <#channel> [continue|resume|fresh]`
+### `/ccslack revive <channel> [continue|resume|fresh]`
 
 Bring back a **killed** session — the recovery path for a mistaken
 `/ccslack kill`. Where `restore` runs *inside* a channel, `revive` is driven
 from the **meta channel** by channel reference, because `kill` **archives** the
 channel and you can't type in an archived one.
 
+`<channel>` accepts a `<#C…>` mention, a **bare channel ID** (`C…`, from the
+archived channel's URL `…/archives/C…`), or the plain channel **name** (e.g.
+`ccslack-myproj`). Prefer the name or ID: Slack's `#` autocomplete *hides
+archived channels*, so you usually can't @-mention a killed one. (Name lookup
+scans archived channels and uses `channels:read` / `groups:read`.)
+
 It does the whole recovery in one shot:
 
-1. **Un-archives** `<#channel>` via the bot API — this bypasses a workspace that
+1. **Un-archives** the channel via the bot API — this bypasses a workspace that
    disables the *Settings → Unarchive* UI (needs the bot's
    `channels:manage` / `groups:write` scopes).
 2. Recovers `provider` + `cwd` from the channel's **topic** (`<provider> · <cwd>`).
@@ -684,7 +690,7 @@ it.
 | `/ccslack list`, `/ccslack sessions` | `ALLOWED_USERS` |
 | Dashboard 🗑️ Kill button | `ALLOWED_USERS` |
 | `/ccslack kill --all`, kill by `<#channel>` / `C…` / `@N` | `ALLOWED_USERS` |
-| `/ccslack revive <#channel>` | `ALLOWED_USERS` |
+| `/ccslack revive <channel>` | `ALLOWED_USERS` |
 | `/ccslack kill` (from session channel) | Channel membership |
 | `/ccslack mute`, `history`, `resume`, `restore`, `panes`, `send`, `rename`, `toolcalls`, `thread`, `relaunch`, `manual`, `run`, `commentary`, `chat`, `users`, `purge`, `autopurge` | Channel membership* |
 | `/ccslack here` (bind current channel) | `ALLOWED_USERS` |

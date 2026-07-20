@@ -429,9 +429,9 @@ def _help_text() -> str:
         f"• `{slash} resume` — pick a past Claude session in this channel's cwd.\n"
         f"• `{slash} restore [continue|resume|fresh]` — respawn a dead session "
         "(after reboot / tmux restart).\n"
-        f"• `{slash} revive <#channel> [continue|resume|fresh]` — bring back a "
-        "*killed* session: un-archive its channel + respawn + resume (meta "
-        "channel).\n"
+        f"• `{slash} revive <channel> [continue|resume|fresh]` — bring back a "
+        "*killed* session (channel = name / ID / mention): un-archive + respawn "
+        "+ resume (meta channel).\n"
         f"• `{slash} panes` — list all tmux panes for this session.\n"
         f"• `{slash} rename <new-name>` — rename this session's Slack channel.\n"
         f"• `{slash} relaunch [--fresh] [args…]` — Ctrl-C the running agent and "
@@ -1163,16 +1163,75 @@ async def _handle_restore(
         )
 
 
+# Bare Slack channel id: public "C…", private "G…", DMs excluded.
+_BARE_CHANNEL_ID_RE = re.compile(r"[CG][A-Z0-9]{6,}")
+# Cap pagination when scanning for a channel by name (incl. archived).
+_CHANNEL_LIST_MAX_PAGES = 10
+
+
+async def _resolve_channel_ref(client, token: str) -> str:  # noqa: ANN001
+    """Resolve a channel token to a channel id, or "" if not found.
+
+    Accepts a ``<#C…>`` mention, a bare id (``C…``/``G…``), or a channel name
+    (with or without a leading ``#``). Name lookup includes **archived**
+    channels — the whole point of ``revive`` — via a bounded ``conversations.list``
+    scan, since archived channels can't be @-mentioned.
+    """
+    token = token.strip()
+    match = _CHANNEL_REF_RE.fullmatch(token)
+    if match:
+        return match.group(1)
+    if _BARE_CHANNEL_ID_RE.fullmatch(token):
+        return token
+
+    name = token.lstrip("#").lower()
+    if not name:
+        return ""
+    # Match the channel type to the scope this deployment actually has:
+    # office/public mode → public_channel (channels:read); default → private
+    # (groups:read). Requesting a type without its scope errors missing_scope.
+    channel_type = "public_channel" if config.public_channels else "private_channel"
+    cursor = ""
+    for _ in range(_CHANNEL_LIST_MAX_PAGES):
+        list_kwargs: dict[str, Any] = {
+            "exclude_archived": False,
+            "types": channel_type,
+            "limit": 1000,
+        }
+        if cursor:
+            list_kwargs["cursor"] = cursor
+        try:
+            resp = await client.conversations_list(**list_kwargs)
+        except SlackApiError as exc:
+            logger.warning(
+                "revive: conversations.list failed: %s",
+                exc.response.get("error") if exc.response else exc,
+            )
+            return ""
+        data = resp if isinstance(resp, dict) else getattr(resp, "data", {}) or {}
+        for channel in data.get("channels", []) or []:
+            if isinstance(channel, dict) and channel.get("name", "").lower() == name:
+                return channel.get("id", "") or ""
+        cursor = (data.get("response_metadata") or {}).get("next_cursor", "") or ""
+        if not cursor:
+            break
+    return ""
+
+
 async def _handle_revive(
     client,  # noqa: ANN001
     channel_id: str,
     user_id: str,
     args: list[str],
 ) -> None:
-    """``/ccslack revive <#channel> [continue|resume|fresh]`` — bring back a
+    """``/ccslack revive <channel> [continue|resume|fresh]`` — bring back a
     *killed* session: un-archive its channel (via the bot API — no manual Slack
     unarchive needed), then respawn + rebind + resume its agent from the
     channel's remembered cwd.
+
+    ``<channel>`` accepts a ``<#C…>`` mention, a bare channel ID (``C…``/``G…``),
+    or the plain channel **name** — because Slack's ``#`` autocomplete hides
+    *archived* channels, so a mention usually can't be typed for a killed one.
 
     Run from the meta channel (you can't type in an archived channel). The agent
     transcript survives a kill, so ``resume``/``continue`` restore the actual
@@ -1188,14 +1247,29 @@ async def _handle_revive(
         elif token.strip():
             target_ref = token.strip()
 
-    match = _CHANNEL_REF_RE.fullmatch(target_ref)
-    revive_channel = match.group(1) if match else ""
+    if not target_ref:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: usage `{slash} revive <channel> [continue|resume|fresh]` "
+                "— channel can be a mention, an ID (`C…`), or the channel name."
+            ),
+        )
+        return
+
+    revive_channel = await _resolve_channel_ref(client, target_ref)
     if not revive_channel:
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
             user=user_id,
-            text=f"ccslack: usage `{slash} revive <#channel> [continue|resume|fresh]`.",
+            text=(
+                f"ccslack: couldn't find a channel matching `{target_ref}`. "
+                "Try the channel *name* (e.g. `ccslack-myproj`) or its ID "
+                "(`C…`, from the archived channel's URL `…/archives/C…`)."
+            ),
         )
         return
 
