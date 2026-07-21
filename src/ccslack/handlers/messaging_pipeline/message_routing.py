@@ -74,11 +74,11 @@ async def handle_new_message(msg: NewMessage, client: SlackClient) -> None:
     """Handle a new assistant message — post to every bound Slack channel.
 
     Policy:
-      * tool_use / tool_result visibility is per-window
-        (``WindowState.tool_call_visibility`` ∈ ``default|shown|hidden``);
-        ``default`` falls back to ``config.hide_tool_calls``. Tool messages get
-        paired (the eventual result rewrites the original tool_use message in
-        place — see ``_post_or_pair``).
+      * tool-chain detail is per-window
+        (``WindowState.tool_call_visibility`` ∈ ``default|full|calls|hidden``);
+        ``default`` falls back to ``config.toolcall_detail``. ``full`` pairs the
+        result into the call message (see ``_post_or_pair``); ``calls`` drops the
+        result; ``hidden`` drops both.
       * short "thinking" snippets (< 20 chars) are dropped globally.
       * interactive ``tool_use`` (AskUserQuestion / ExitPlanMode /
         request_user_input) skip the normal post and drive the live picker
@@ -170,13 +170,18 @@ async def _pre_post_suppressed(
         await update_status(client, channel_id, window_id, "active")
         return True
 
-    if msg.content_type in (
-        "tool_use",
-        "tool_result",
-    ) and window_query.is_tool_calls_hidden(window_id):
-        logger.debug("Tool calls hidden for window %s; skipping", window_id)
-        await update_status(client, channel_id, window_id, "active")
-        return True
+    if msg.content_type in ("tool_use", "tool_result"):
+        detail = window_query.resolved_toolcall_detail(window_id)
+        # hidden → drop the whole chain; calls → keep the call, drop its result.
+        if detail == "hidden" or (detail == "calls" and msg.content_type == "tool_result"):
+            logger.debug(
+                "Tool detail=%s for window %s; skipping %s",
+                detail,
+                window_id,
+                msg.content_type,
+            )
+            await update_status(client, channel_id, window_id, "active")
+            return True
 
     if _should_skip_for_mode(notification_mode, text, msg):
         logger.debug(

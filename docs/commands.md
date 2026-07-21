@@ -286,17 +286,22 @@ kept; use [`/ccslack history`](#-ccslack-history) for the full backlog.)
 - **Where**: a bound session channel.
 - **Auth**: channel membership.
 
-### `/ccslack toolcalls [shown|hidden|default]`
+### `/ccslack toolcalls [full|calls|hidden|default]`
 
-Per-channel tool-use / tool-result visibility.
+Per-channel **tool-chain detail** — how much of the agent's tool activity syncs
+to Slack. The exec *result* of a tool call is usually the noisiest, least-read
+part, so it's skipped by default.
 
 | Mode | Effect |
 |---|---|
-| `shown` | Always show the tool chain in this channel |
-| `hidden` | Always hide tool calls |
-| `default` | Defer to the global `CCSLACK_HIDE_TOOL_CALLS` env var |
+| `full` (alias `shown`, `all`) | The tool **call** *and* its exec **result** post (result pairs into the call message in place). |
+| `calls` (alias `compact`, `noresults`) | The tool **call** only; the exec result is skipped. |
+| `hidden` (alias `off`) | Neither call nor result posts. |
+| `default` | Defer to the global `CCSLACK_TOOLCALLS` env var (default `calls`). |
 
-No arg cycles. Default global is `shown` (matches ccgram).
+No arg cycles `full → calls → hidden → default`. The global default is
+**`calls`** — set `CCSLACK_TOOLCALLS=full` for the old call+result behavior, or
+`hidden` for none. (Legacy `CCSLACK_HIDE_TOOL_CALLS=true` still maps to `hidden`.)
 
 - **Where**: a bound session channel.
 - **Auth**: channel membership.

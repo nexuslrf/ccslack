@@ -281,13 +281,26 @@ class Config:
         )
 
     def _init_feature_flags(self) -> None:
-        # Global default for hiding tool_use/tool_result content.
-        # Per-window override via WindowState.tool_call_visibility takes precedence.
-        # Default is *show* (matches ccgram) so users see the agent's tool chain
-        # right away; set CCSLACK_HIDE_TOOL_CALLS=true to opt back into quiet mode.
-        self.hide_tool_calls: bool = os.getenv(
-            "CCSLACK_HIDE_TOOL_CALLS", "false"
-        ).lower() in ("1", "true", "yes")
+        # Global default tool-call *detail* — how much of the tool chain syncs to
+        # Slack. Per-window WindowState.tool_call_visibility overrides it.
+        #   full   — tool call + exec result
+        #   calls  — tool call only (exec result skipped; often noise) — DEFAULT
+        #   hidden — neither
+        # Legacy CCSLACK_HIDE_TOOL_CALLS=true still maps to ``hidden`` when
+        # CCSLACK_TOOLCALLS is unset.
+        detail = (os.getenv("CCSLACK_TOOLCALLS") or "").strip().lower()
+        if detail not in ("full", "calls", "hidden"):
+            if detail:
+                logger.warning(
+                    "Invalid CCSLACK_TOOLCALLS=%r; using 'calls'", detail
+                )
+            legacy_hide = os.getenv("CCSLACK_HIDE_TOOL_CALLS", "").lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            detail = "hidden" if legacy_hide else "calls"
+        self.toolcall_detail: str = detail
 
         # When an agent answer contains a markdown table, offer a button to
         # render it as an image (Slack renders markdown tables poorly). The raw

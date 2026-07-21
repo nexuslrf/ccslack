@@ -26,7 +26,7 @@ the per-feature Telegram → Slack mapping table.
 | 🎛️ Toolbar | Provider-aware Block Kit buttons that drive the tmux TUI — arrows, Enter, Esc, Tab, Space, digits, Ctrl-C |
 | 🔔 Live picker | On every `tool_use` of `AskUserQuestion` / `ExitPlanMode` / `request_user_input`, a Block Kit picker appears in the channel, refreshes as the pane changes, and resolves when the agent moves on. Fallback regex prober for non-hook providers (Codex `›`-arrow approval, shell prompts) |
 | 👤 User echo | The user's own prompt echo is prefixed with a silhouette so you instantly see "what I said" vs "what the agent said" |
-| 🔧 Tool-use chain | `tool_use` + matching `tool_result` are paired and edit the same Slack message in place — channel reads as one tool call → result chunk. Per-channel `shown` / `hidden` / `default` cycling |
+| 🔧 Tool-use chain | Per-channel tool-chain detail via `/ccslack toolcalls`: `full` (call + exec result, paired into one message), `calls` (call only — exec result skipped, the **default**), or `hidden` |
 | 📷 Screenshot | Viewport-only PNG of the pane, uploaded into the channel. Bounded size; focuses on recent ops |
 | 📋 `/ccslack history` | Paginated transcript of the last N messages in the channel |
 | ↩️ `/ccslack resume` | Block Kit list of past Claude sessions matching the channel's cwd |

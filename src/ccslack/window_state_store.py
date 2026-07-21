@@ -37,8 +37,21 @@ DEFAULT_BATCH_MODE = "batched"
 #               /screenshot. Input still forwards INTO the session.
 NOTIFICATION_MODES: tuple[str, ...] = ("all", "errors_only", "muted", "silent")
 
-TOOL_CALL_VISIBILITY_MODES: tuple[str, ...] = ("default", "shown", "hidden")
+# Per-window tool-call *detail* level (how much of the tool chain syncs to Slack):
+#   full    — the tool call AND its exec result (result pairs into the call msg)
+#   calls   — the tool call only; the exec result is skipped (often noise)
+#   hidden  — neither
+#   default — defer to the global CCSLACK_TOOLCALLS
+# ``shown`` is a legacy alias for ``full`` (kept for persisted state / muscle memory).
+TOOL_CALL_VISIBILITY_MODES: tuple[str, ...] = ("default", "full", "calls", "hidden")
 DEFAULT_TOOL_CALL_VISIBILITY: str = "default"
+# Legacy value normalisation (old "shown" == "full").
+_TOOL_CALL_LEGACY_ALIASES: dict[str, str] = {"shown": "full"}
+
+
+def normalize_tool_call_visibility(mode: str) -> str:
+    """Canonicalise a tool-call visibility value (maps the legacy ``shown``)."""
+    return _TOOL_CALL_LEGACY_ALIASES.get(mode, mode)
 
 # Per-window override for grouping tool chains into a Slack thread.
 # "default" defers to config.thread_tool_calls; "on"/"off" force it.
@@ -593,10 +606,12 @@ class WindowStateStore:
     def get_tool_call_visibility(self, window_id: str) -> str:
         """Get tool-call visibility for a window (default: 'default')."""
         state = self.window_states.get(window_id)
-        return state.tool_call_visibility if state else DEFAULT_TOOL_CALL_VISIBILITY
+        raw = state.tool_call_visibility if state else DEFAULT_TOOL_CALL_VISIBILITY
+        return normalize_tool_call_visibility(raw)
 
     def set_tool_call_visibility(self, window_id: str, mode: str) -> None:
-        """Set tool-call visibility for a window."""
+        """Set tool-call visibility for a window (accepts the legacy ``shown``)."""
+        mode = normalize_tool_call_visibility(mode)
         if mode not in self._TOOL_CALL_VISIBILITY_MODES:
             raise ValueError(f"Invalid tool_call_visibility: {mode!r}")
         state = self.get_window_state(window_id)
@@ -605,7 +620,7 @@ class WindowStateStore:
             self._schedule_save()
 
     def cycle_tool_call_visibility(self, window_id: str) -> str:
-        """Cycle tool-call visibility: default → shown → hidden → default. Returns new mode."""
+        """Cycle detail: default → full → calls → hidden → default. Returns new mode."""
         current = self.get_tool_call_visibility(window_id)
         modes = self._TOOL_CALL_VISIBILITY_MODES
         idx = modes.index(current) if current in modes else 0

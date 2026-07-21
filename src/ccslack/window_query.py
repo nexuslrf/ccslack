@@ -89,21 +89,22 @@ def get_tool_call_visibility(window_id: str) -> str:
     return mode if mode in TOOL_CALL_VISIBILITY_MODES else DEFAULT_TOOL_CALL_VISIBILITY
 
 
-def is_tool_calls_hidden(window_id: str) -> bool:
-    """Resolved boolean: should tool_use/tool_result be suppressed for this window?
+def resolved_toolcall_detail(window_id: str) -> str:
+    """Resolve how much tool-chain detail syncs to Slack for this window.
 
-    Composes the per-window override with the global ``config.hide_tool_calls``
-    default. Per-window ``shown``/``hidden`` always wins; ``default`` falls
-    through to the global setting.
+    Returns one of ``full`` (call + exec result), ``calls`` (call only), or
+    ``hidden`` (neither). Per-window ``full``/``calls``/``hidden`` wins;
+    ``default`` falls through to the global ``config.toolcall_detail``.
     """
     visibility = get_tool_call_visibility(window_id)
-    if visibility == "hidden":
-        return True
-    if visibility == "shown":
-        return False
-    # visibility == "default" — fall through to global config
+    if visibility in ("full", "calls", "hidden"):
+        return visibility
+    return config.toolcall_detail
 
-    return config.hide_tool_calls
+
+def is_tool_calls_hidden(window_id: str) -> bool:
+    """Back-compat boolean: is the *entire* tool chain suppressed for this window?"""
+    return resolved_toolcall_detail(window_id) == "hidden"
 
 
 def get_thread_tool_calls(window_id: str) -> str:

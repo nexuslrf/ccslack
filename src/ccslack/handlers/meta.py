@@ -446,8 +446,8 @@ def _help_text() -> str:
         f"• `{slash} send [path|glob|substring]` — upload file(s) from the "
         "session's cwd (e.g. `send docs/arch.png`, `send *.png`, `send arch`). "
         "With no argument, opens an interactive file browser.\n"
-        f"• `{slash} toolcalls [shown|hidden|default]` — show/hide tool_use & "
-        "tool_result for this channel.\n"
+        f"• `{slash} toolcalls [full|calls|hidden|default]` — tool-chain detail: "
+        "`full` (call+result), `calls` (call only), `hidden`.\n"
         f"• `{slash} thread [on|off|default]` — group tool chains under a "
         "thread parent (vs flat).\n"
         f"• `{slash} kill` — kill the session for THIS channel.\n"
@@ -1975,9 +1975,15 @@ async def _handle_kill(
 
 # Aliases the user can pass to ``/ccslack toolcalls``.
 _TOOLCALLS_ALIASES = {
-    "shown": "shown",
-    "show": "shown",
-    "on": "shown",
+    "full": "full",
+    "all": "full",
+    "shown": "full",  # legacy
+    "show": "full",
+    "on": "full",
+    "calls": "calls",
+    "call": "calls",
+    "compact": "calls",
+    "noresults": "calls",
     "hidden": "hidden",
     "hide": "hidden",
     "off": "hidden",
@@ -1992,7 +1998,7 @@ async def _handle_toolcalls(
     user_id: str,
     args: list[str],
 ) -> None:
-    """``/ccslack toolcalls [shown|hidden|default]`` — cycle or set tool-call visibility."""
+    """``/ccslack toolcalls [full|calls|hidden|default]`` — set tool-chain detail."""
     window_id = thread_router.get_window_for_channel(channel_id)
     if window_id is None:
         await _post_ephemeral(
@@ -2013,7 +2019,7 @@ async def _handle_toolcalls(
                 user=user_id,
                 text=(
                     f"ccslack: unknown mode `{alias}` — pick "
-                    "`shown`, `hidden`, or `default`."
+                    "`full`, `calls`, `hidden`, or `default`."
                 ),
             )
             return
@@ -2022,11 +2028,12 @@ async def _handle_toolcalls(
         mode = session_manager.cycle_tool_call_visibility(window_id)
 
     labels = {
-        "shown": ":wrench: *shown* — every tool_use + tool_result posts",
-        "hidden": ":no_entry_sign: *hidden* — tool_use + tool_result suppressed",
+        "full": ":wrench: *full* — tool call *and* its exec result post",
+        "calls": ":wrench: *calls* — tool call only; exec result skipped",
+        "hidden": ":no_entry_sign: *hidden* — tool call + result suppressed",
         "default": (
             ":gear: *default* — follows global "
-            f"`CCSLACK_HIDE_TOOL_CALLS` (currently `{config.hide_tool_calls}`)"
+            f"`CCSLACK_TOOLCALLS` (currently `{config.toolcall_detail}`)"
         ),
     }
     await _post_ephemeral(

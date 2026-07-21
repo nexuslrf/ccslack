@@ -94,7 +94,7 @@ events instead of opening Socket Mode, so it runs without it.
 | Variable | Default | Description |
 |---|---|---|
 | `CCSLACK_STATUS_MODE` | `system` | Status emoji colour scheme. `system` = 🟢 working / 🟡 idle. `user` = 🟢 ready / 🟡 working. Invalid values fall back to `system`. |
-| `CCSLACK_HIDE_TOOL_CALLS` | `false` | Global default for tool-use / tool-result visibility. Per-channel `/ccslack toolcalls` overrides this. Default `false` (show) to match ccgram. |
+| `CCSLACK_TOOLCALLS` | `calls` | Global default tool-chain detail: `full` (tool call + exec result), `calls` (call only — exec result skipped, the usual noise), or `hidden` (neither). Per-channel `/ccslack toolcalls` overrides it. Legacy `CCSLACK_HIDE_TOOL_CALLS=true` still maps to `hidden` when this is unset. |
 | `CCSLACK_THREAD_TOOL_CALLS` | `true` | Global default for grouping a turn's `tool_use` / `tool_result` / `thinking` under one threaded parent in the main channel (keeps long tool chains tidy). Plain answers + interactive prompts stay in the main channel. Per-channel `/ccslack thread [on\|off\|default]` overrides this. |
 
 ### Shell sessions
@@ -237,7 +237,7 @@ Each session channel has settings persisted on its `WindowState`:
 | Field | Values | Set by |
 |---|---|---|
 | `notification_mode` | `all` / `errors_only` / `muted` | `/ccslack mute …` |
-| `tool_call_visibility` | `default` / `shown` / `hidden` | `/ccslack toolcalls …` |
+| `tool_call_visibility` | `default` / `full` / `calls` / `hidden` | `/ccslack toolcalls …` |
 | `thread_tool_calls` | `default` / `on` / `off` | `/ccslack thread …` |
 | `status_state` | `active` / `idle` / `done` / `dead` | Polling loop + hook events |
 | `status_message_ts` | Slack `ts` of the pinned status message | Bot on first status post |
