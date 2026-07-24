@@ -640,6 +640,13 @@ class CodexProvider(JsonlProvider):
         supports_hook_events=True,
         hook_install_managed_by_ccslack=True,
         hook_event_types=("SessionStart", "Stop"),
+        # Hooks stay the fast path, but newer Codex builds route the
+        # interactive TUI through the app-server (feature ``tui_app_server``),
+        # which never invokes command hooks — so a hook-only window would never
+        # register. Enable hookless discovery as a forward-compatible fallback:
+        # the monitor polls discover_transcript() for still-unresolved windows
+        # and binds them by cwd. Only runs when the hook did not fire.
+        supports_hookless_discovery=True,
         supports_resume=True,
         supports_continue=True,
         supports_structured_transcript=True,
