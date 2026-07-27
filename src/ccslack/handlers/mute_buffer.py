@@ -1,34 +1,45 @@
-"""Remember the last agent answer a mute mode suppressed, to flush on un-mute.
+"""Remember the last one or two agent answers a mute mode suppressed, to flush on un-mute.
 
 A muted / silent channel drops agent output (the monitor advances past it), so
 raising the mode back to a chattier one showed nothing until the *next* turn —
 which felt like "posting won't resume". This tiny buffer keeps the most recent
-suppressed assistant answer per window; ``/ccslack mute`` flushes it when the
+suppressed assistant answers per window; ``/ccslack mute`` flushes them when the
 channel becomes more verbose, so un-muting immediately surfaces what was missed.
 
-Bounded to one message per window (the latest answer — the thing worth seeing)
-and free of heavy imports so both the routing layer and ``handlers.meta`` can
-use it without cycles.
+Bounded to the ``_MAX_BUFFERED`` most recent answers per window: un-muting a
+long silent stretch shouldn't dump the whole backlog — one or two final answers
+is enough to re-orient, and the rest was already consumed by the monitor. Kept
+free of heavy imports so both the routing layer and ``handlers.meta`` can use it
+without cycles.
 """
 
 from __future__ import annotations
 
-_last_answer: dict[str, str] = {}
+# Keep at most this many recent suppressed answers per window.
+_MAX_BUFFERED = 2
+
+_recent_answers: dict[str, list[str]] = {}
 
 
 def remember(window_id: str, text: str) -> None:
-    """Record the latest assistant answer suppressed for ``window_id``."""
-    _last_answer[window_id] = text
+    """Record a suppressed assistant answer, keeping the last ``_MAX_BUFFERED``."""
+    answers = _recent_answers.setdefault(window_id, [])
+    answers.append(text)
+    # Trim in place to the most recent _MAX_BUFFERED (no-op while under the cap).
+    del answers[:-_MAX_BUFFERED]
 
 
 def take(window_id: str) -> str | None:
-    """Pop and return the buffered answer for ``window_id`` (None if empty)."""
-    return _last_answer.pop(window_id, None)
+    """Pop the buffered answers for ``window_id``, oldest-first (None if empty)."""
+    answers = _recent_answers.pop(window_id, None)
+    if not answers:
+        return None
+    return "\n\n".join(answers)
 
 
 def reset() -> None:
     """Clear all buffered answers (test helper)."""
-    _last_answer.clear()
+    _recent_answers.clear()
 
 
 __all__ = ["remember", "reset", "take"]

@@ -186,3 +186,26 @@ def test_mute_buffer_take_is_one_shot():
     mute_buffer.remember("@1", "x")
     assert mute_buffer.take("@1") == "x"
     assert mute_buffer.take("@1") is None
+
+
+def test_mute_buffer_keeps_last_two_answers():
+    mute_buffer.remember("@1", "first")
+    mute_buffer.remember("@1", "second")
+    mute_buffer.remember("@1", "third")
+    assert mute_buffer.take("@1") == "second\n\nthird"
+    assert mute_buffer.take("@1") is None
+
+
+@pytest.mark.asyncio
+async def test_unmute_flushes_up_to_two_answers():
+    _bind("C1", "@1")
+    window_store.set_notification_mode("@1", "silent")
+    mute_buffer.remember("@1", "answer one")
+    mute_buffer.remember("@1", "answer two")
+    client = FakeSlackClient()
+
+    await _handle_mute(client, "C1", "U1", ["all"])
+
+    posts = [c.kwargs.get("text", "") for c in client.calls if c.method == "chat_postMessage"]
+    assert any("answer one" in p and "answer two" in p for p in posts)
+    assert mute_buffer.take("@1") is None
