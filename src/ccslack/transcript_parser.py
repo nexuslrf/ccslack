@@ -45,6 +45,9 @@ class ParsedEntry:
     tool_name: str | None = (
         None  # For tool_use entries, the tool name (e.g. "AskUserQuestion")
     )
+    phase: str | None = (
+        None  # For text entries: "commentary" (pre-tool narration) | "final_answer"
+    )
 
 
 @dataclass
@@ -502,6 +505,18 @@ class TranscriptParser:
             if msg_type == "assistant":
                 # Process content blocks
                 has_text = False
+                # Claude stamps an assistant response that will call a tool with
+                # stop_reason="tool_use"; text emitted in that response is running
+                # narration, not the answer. A terminal stop_reason (end_turn /
+                # stop_sequence, or absent) marks the turn's final answer. Claude
+                # Code writes each content block as its own JSONL line carrying the
+                # response's stop_reason, so this classifies per-entry with no
+                # look-ahead — mirroring Codex's own "commentary" vs "final_answer".
+                text_phase = (
+                    "commentary"
+                    if message.get("stop_reason") == "tool_use"
+                    else "final_answer"
+                )
                 for block in content:
                     if not isinstance(block, dict):
                         continue
@@ -516,6 +531,7 @@ class TranscriptParser:
                                     text=t,
                                     content_type="text",
                                     timestamp=entry_timestamp,
+                                    phase=text_phase,
                                 )
                             )
                             has_text = True
