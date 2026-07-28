@@ -43,12 +43,25 @@ logger = structlog.get_logger()
 # because the existence + security validation below does the real filtering.
 _BACKTICK_RE = re.compile(r"`([^`\n]+)`")  # inline code span
 _MDLINK_RE = re.compile(r"\]\(([^)\s]+)\)")  # markdown link target
-# Bare word: either a slash-bearing path (src/foo.py, a/b) or a lone filename
-# with an extension (report.md). Word boundaries keep it from eating prose.
+# Slack auto-link markup: <target|label> or <target>. Agent paths that Slack
+# rendered as links arrive this way — take the target (before the optional
+# ``|label``), which carries the real path.
+_SLACK_LINK_RE = re.compile(r"<([^>|\s]+)(?:\|[^>]*)?>")
+# Bare path tokens, three shapes:
+#   * absolute:  /a/b/c.py            (leading slash, preceded by a non-word char)
+#   * relative:  src/foo.py, ~/a/b    (slash-bearing)
+#   * bare file: report.md            (lone filename with an extension)
+# Word boundaries keep them from eating prose; existence + validate_sendable is
+# the real filter, so over-capturing is safe.
 _BARE_RE = re.compile(
-    r"(?<![\w/])(?:~?[\w.+\-]+/)+[\w.+\-]+"
+    r"(?<![\w])/(?:[\w.+\-]+/)*[\w.+\-]+"
+    r"|(?<![\w/])~?(?:[\w.+\-]+/)+[\w.+\-]+"
     r"|(?<![\w/])[\w.+\-]+\.[A-Za-z0-9]{1,12}(?![\w])"
 )
+
+# A trailing ``:line`` or ``:line:col`` suffix editors/agents append to a path
+# (``foo.py:722``, ``foo.py:722:5``) — stripped so the path itself resolves.
+_LINE_SUFFIX_RE = re.compile(r":\d+(?::\d+)?$")
 
 # Trailing punctuation that sentence context (not the filename) contributed.
 _TRAILING = ".,;:!?)]}>\"'`"
@@ -64,8 +77,11 @@ _PENDING_MAX = 256
 
 
 def _clean_token(tok: str) -> str:
-    """Strip quoting/wrapping and sentence punctuation from a candidate token."""
+    """Strip quoting/wrapping, a ``:line`` suffix, and sentence punctuation."""
     tok = tok.strip().strip("`'\"<>")
+    # Drop a trailing editor line/column ref (foo.py:722[:5]) before the
+    # sentence-punctuation sweep, which wouldn't remove the digits.
+    tok = _LINE_SUFFIX_RE.sub("", tok)
     while tok and tok[-1] in _TRAILING:
         tok = tok[:-1]
     if tok.startswith("./"):
@@ -78,6 +94,7 @@ def _candidates(text: str) -> list[str]:
     raw: list[str] = []
     raw.extend(_BACKTICK_RE.findall(text))
     raw.extend(_MDLINK_RE.findall(text))
+    raw.extend(_SLACK_LINK_RE.findall(text))
     raw.extend(_BARE_RE.findall(text))
     seen: set[str] = set()
     out: list[str] = []

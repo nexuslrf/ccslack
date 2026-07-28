@@ -43,6 +43,21 @@ def test_candidates_skip_urls_and_plain_words():
     assert "hello" not in cands
 
 
+def test_candidates_slack_link_markup_takes_target():
+    cands = _candidates("open </a/b/prepare.py:722|prepare.py> now")
+    assert "/a/b/prepare.py" in cands  # full target, not just the label
+
+
+def test_candidates_bare_absolute_path():
+    assert "/abs/path/foo.py" in _candidates("wrote /abs/path/foo.py done")
+
+
+def test_candidates_strip_line_and_column_suffix():
+    cands = _candidates("edit src/app.py:722 and lib/x.py:12:5")
+    assert "src/app.py" in cands
+    assert "lib/x.py" in cands
+
+
 def test_finds_referenced_files(tree: Path):
     text = "I created `src/app.py` and updated report.md."
     found = {p.name for p in find_file_refs(text, tree)}
@@ -52,6 +67,13 @@ def test_finds_referenced_files(tree: Path):
 def test_relative_and_dotslash_paths(tree: Path):
     found = {str(p.resolve()) for p in find_file_refs("see ./src/app.py", tree)}
     assert str((tree / "src" / "app.py").resolve()) in found
+
+
+def test_slack_link_with_line_suffix_under_cwd(tree: Path):
+    abs_path = (tree / "src" / "app.py").resolve()
+    text = f"see <{abs_path}:722|app.py> for the change"
+    found = {p.name for p in find_file_refs(text, tree)}
+    assert "app.py" in found
 
 
 def test_nonexistent_paths_dropped(tree: Path):
