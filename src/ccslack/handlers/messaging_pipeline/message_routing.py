@@ -289,6 +289,17 @@ async def _route_to_channel(
 
         await maybe_offer_table_render(client, channel_id, text)
 
+    # Offer a "Show files" button when a final answer names real project files.
+    # Skip pre-tool-call narration (commentary) — only the answer is scanned.
+    if (
+        msg.role != "user"
+        and msg.content_type == "text"
+        and msg.phase != "commentary"
+    ):
+        from ..file_refs import maybe_offer_file_refs
+
+        await maybe_offer_file_refs(client, channel_id, text)
+
     # No-hooks turn-end signal: the agent's final answer closes the thread.
     # The Stop hook also calls end_turn (idempotent), so this is just a
     # backstop for providers / setups without hooks.

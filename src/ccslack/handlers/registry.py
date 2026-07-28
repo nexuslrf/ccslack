@@ -38,6 +38,7 @@ def register_all(app: AsyncApp) -> None:
         "send",
         "recovery",
         "table_render",
+        "file_refs",
         "purge",
         "ssh_prompt",
     ):

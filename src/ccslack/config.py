@@ -310,6 +310,13 @@ class Config:
             "CCSLACK_TABLE_RENDER", "true"
         ).lower() in ("1", "true", "yes")
 
+        # When an agent's final answer names files in the project, offer a
+        # "Show files" button that lists exactly those files for one-tap upload
+        # (validated like /ccslack send). Set CCSLACK_FILE_REFS=false to skip.
+        self.file_refs_offer: bool = os.getenv(
+            "CCSLACK_FILE_REFS", "true"
+        ).lower() in ("1", "true", "yes")
+
         # After `/ccslack new` creates a session, post a join offer in the meta
         # channel so other allowed users can opt into the new private channel.
         # Set CCSLACK_JOIN_OFFER=false to skip it.
