@@ -281,6 +281,13 @@ async def _route_to_channel(
     decorated = _decorate(msg, text)
     await _post_or_pair(client, channel_id, msg, decorated, thread_ts=thread_ts)
 
+    # Any agent output posted below an open live picker buries it in scrollback.
+    # Flag it so the picker's refresh loop bumps a fresh copy to the bottom,
+    # keeping the active prompt as the newest message.
+    from ..interactive import note_channel_post
+
+    note_channel_post(channel_id)
+
     # Offer to render any markdown table in a plain agent answer as an image
     # (Slack renders tables poorly). The raw text is already posted above; this
     # only adds an opt-in button. User echoes / tool flows are skipped.

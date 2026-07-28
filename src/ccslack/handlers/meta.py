@@ -232,6 +232,13 @@ def register(app: AsyncApp) -> None:
             "restore",
             "panes",
             "send",
+            "file",
+            "screenshot",
+            "shot",
+            "ss",
+            "toolbar",
+            "tb",
+            "tools",
             "rename",
             "toolcalls",
             "thread",
@@ -364,12 +371,20 @@ def register(app: AsyncApp) -> None:
             await _handle_restore(client, channel_id, user_id, args)
             return
 
-        if sub == "send":
+        if sub in ("send", "file"):
             # Lazy: send pulls security predicates + uploader.
             from .send import handle_send
 
             raw_path = args[0] if args else ""
             await handle_send(client, channel_id, user_id, raw_path)
+            return
+
+        if sub in ("screenshot", "shot", "ss"):
+            await _handle_screenshot(client, channel_id, user_id)
+            return
+
+        if sub in ("toolbar", "tb", "tools"):
+            await _handle_toolbar(client, channel_id, user_id)
             return
 
         if sub == "rename":
@@ -445,7 +460,11 @@ def _help_text() -> str:
         "narration (final answers always post).\n"
         f"• `{slash} send [path|glob|substring]` — upload file(s) from the "
         "session's cwd (e.g. `send docs/arch.png`, `send *.png`, `send arch`). "
-        "With no argument, opens an interactive file browser.\n"
+        "With no argument, opens an interactive file browser. Alias: `file`.\n"
+        f"• `{slash} screenshot` — typed shortcut for the pinned :camera: button "
+        "(aliases `shot`, `ss`).\n"
+        f"• `{slash} toolbar` — typed shortcut for the pinned :control_knobs: "
+        "button (aliases `tb`, `tools`).\n"
         f"• `{slash} toolcalls [full|calls|hidden|default]` — tool-chain detail: "
         "`full` (call+result), `calls` (call only), `hidden`.\n"
         f"• `{slash} thread [on|off|default]` — group tool chains under a "
@@ -1990,6 +2009,50 @@ _TOOLCALLS_ALIASES = {
     "default": "default",
     "auto": "default",
 }
+
+
+async def _handle_screenshot(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+) -> None:
+    """``/ccslack screenshot`` — typed shortcut for the pinned Screenshot button."""
+    window_id = thread_router.get_window_for_channel(channel_id)
+    if window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `screenshot` only works inside a bound session channel.",
+        )
+        return
+    # Lazy: screenshot pulls the pane-capture + image renderer.
+    from .screenshot import upload_screenshot
+
+    await upload_screenshot(
+        client, channel_id=channel_id, window_id=window_id, user_id=user_id
+    )
+
+
+async def _handle_toolbar(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+) -> None:
+    """``/ccslack toolbar`` — typed shortcut for the pinned Toolbar button."""
+    window_id = thread_router.get_window_for_channel(channel_id)
+    if window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `toolbar` only works inside a bound session channel.",
+        )
+        return
+    # Lazy: toolbar pulls the Block Kit key-grid + live refresh loop.
+    from .toolbar import open_toolbar
+
+    await open_toolbar(client, channel_id, window_id)
 
 
 async def _handle_toolcalls(

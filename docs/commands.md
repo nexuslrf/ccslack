@@ -514,14 +514,20 @@ Each kill does (in order):
 
 | Button | Action |
 |---|---|
-| 📷 **Screenshot** | Captures the visible viewport of the tmux pane, renders to PNG, uploads via `files.upload_v2`. Bounded size — focuses on most recent operations. |
-| 🎛️ **Toolbar** | Posts a separate Block Kit toolbar message with per-provider key buttons (see below). |
-| 📤 **File** | Opens the interactive file browser (same as a no-arg `/ccslack send`) as an ephemeral for the clicker. |
-| 🗑️ **Archive** | Confirm modal → kills the tmux window, unbinds the channel, archives the Slack channel. |
+| 📷 **Screenshot** | Captures the visible viewport of the tmux pane, renders to PNG, uploads via `files.upload_v2`. Bounded size — focuses on most recent operations. Typed shortcut: `/ccslack screenshot` (aliases `shot`, `ss`). |
+| 🎛️ **Toolbar** | Posts a separate Block Kit toolbar message with per-provider key buttons (see below). Typed shortcut: `/ccslack toolbar` (aliases `tb`, `tools`). |
+| 📤 **File** | Opens the interactive file browser (same as a no-arg `/ccslack send`) as an ephemeral for the clicker. Typed shortcut: `/ccslack send` (alias `file`). |
+| 🗑️ **Archive** | Confirm modal → kills the tmux window, unbinds the channel, archives the Slack channel. Typed shortcut: `/ccslack kill`. |
 
 These buttons resolve the target window from the channel's **current** binding
 (not the id baked into the message), so they keep working after a `/ccslack
 restore` rebinds the channel to a new tmux window.
+
+**Typed shortcuts.** Each non-destructive status button has a slash equivalent
+so you can trigger it by typing instead of scrolling up to the pinned message:
+`/ccslack screenshot` (`shot` / `ss`), `/ccslack toolbar` (`tb` / `tools`), and
+`/ccslack send` / `file` for the file browser. They resolve the same current
+channel binding.
 
 ### Toolbar (posted by 🎛️)
 

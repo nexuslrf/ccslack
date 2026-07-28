@@ -127,3 +127,99 @@ async def test_exit_for_window_closes_by_window_id(fake_client):
 async def test_exit_interactive_mode_is_idempotent(fake_client):
     # No session — exit returns False but doesn't raise.
     assert await exit_interactive_mode(fake_client, "C0EMPTY") is False
+
+
+# ── keep-picker-newest (bump-to-bottom) ──────────────────────────────────────
+
+
+async def _enter(client, *, window="@7", tool_use_id="tu_1", tool="AskUserQuestion"):
+    async def fake_capture(_window_id):
+        return "pane"
+
+    with patch.object(interactive, "_capture_pane_snippet", side_effect=fake_capture):
+        await enter_interactive_mode(
+            client,
+            channel_id="C0SESS",
+            window_id=window,
+            tool_use_id=tool_use_id,
+            tool_name=tool,
+        )
+
+
+def _stop_refresh(session):
+    if session and session.refresh_task is not None:
+        session.refresh_task.cancel()
+
+
+def test_note_channel_post_marks_buried(fake_client):
+    interactive._active["C0SESS"] = interactive.InteractiveSession(
+        channel_id="C0SESS",
+        window_id="@7",
+        message_ts="1.1",
+        tool_use_id="tu_1",
+        tool_name="AskUserQuestion",
+        started_at=0.0,
+        last_change_at=0.0,
+    )
+    assert interactive._active["C0SESS"].buried is False
+    interactive.note_channel_post("C0SESS")
+    assert interactive._active["C0SESS"].buried is True
+    # No-op for a channel without a live picker.
+    interactive.note_channel_post("C0OTHER")
+
+
+@pytest.mark.asyncio
+async def test_new_prompt_reposts_at_bottom(fake_client):
+    await _enter(fake_client, tool_use_id="tu_1")
+    session = session_for_window("@7")
+    assert session.message_ts == "1700000000.000100"
+
+    fake_client.returns["chat_postMessage"] = {"ok": True, "ts": "1700000000.000200"}
+    await _enter(fake_client, tool_use_id="tu_2")  # different prompt, same window
+
+    session = session_for_window("@7")
+    assert session.message_ts == "1700000000.000200"  # moved to the new message
+    assert session.tool_use_id == "tu_2"
+    assert fake_client.call_count("chat_postMessage") == 2
+    # Old message deleted so its stale buttons can't drive the pane.
+    deleted = [c.kwargs["ts"] for c in fake_client.calls if c.method == "chat_delete"]
+    assert "1700000000.000100" in deleted
+    _stop_refresh(session)
+
+
+@pytest.mark.asyncio
+async def test_buried_same_prompt_reposts_at_bottom(fake_client):
+    await _enter(fake_client, tool_use_id="tu_1")
+    session = session_for_window("@7")
+    session.buried = True
+
+    fake_client.returns["chat_postMessage"] = {"ok": True, "ts": "1700000000.000200"}
+    await _enter(fake_client, tool_use_id="tu_1")  # same prompt, but buried
+
+    session = session_for_window("@7")
+    assert session.message_ts == "1700000000.000200"
+    assert session.buried is False
+    assert fake_client.call_count("chat_postMessage") == 2
+    _stop_refresh(session)
+
+
+@pytest.mark.asyncio
+async def test_unburied_same_prompt_edits_in_place(fake_client):
+    await _enter(fake_client, tool_use_id="tu_1")
+
+    # Same prompt, not buried, but pane changed → edit in place, no new message.
+    async def fake_capture(_window_id):
+        return "different pane"
+
+    with patch.object(interactive, "_capture_pane_snippet", side_effect=fake_capture):
+        await enter_interactive_mode(
+            fake_client,
+            channel_id="C0SESS",
+            window_id="@7",
+            tool_use_id="tu_1",
+            tool_name="AskUserQuestion",
+        )
+
+    assert fake_client.call_count("chat_postMessage") == 1  # no repost
+    assert fake_client.call_count("chat_update") >= 1
+    _stop_refresh(session_for_window("@7"))

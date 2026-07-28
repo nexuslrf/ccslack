@@ -136,16 +136,36 @@ class InteractiveSession:
     started_at: float
     last_change_at: float
     last_pane_hash: str = ""
+    # Set when other output posts below the picker (see ``note_channel_post``);
+    # the refresh loop then reposts the picker at the channel bottom.
+    buried: bool = False
+    last_bump_at: float = 0.0
     refresh_task: asyncio.Task[None] | None = field(default=None, repr=False)
 
 
 # Keyed by channel_id — each Slack channel has at most one active picker.
 _active: dict[str, InteractiveSession] = {}
 
+# Minimum seconds between "bump the picker to the bottom" reposts, so a burst of
+# agent output can't spawn a message per line.
+MIN_BUMP_INTERVAL = 3.0
+
 
 def is_in_interactive_mode(channel_id: str) -> bool:
     """True iff this channel has a live picker."""
     return channel_id in _active
+
+
+def note_channel_post(channel_id: str) -> None:
+    """Flag the channel's live picker as buried by a later message.
+
+    Called from the message pipeline right after it posts agent output. If a
+    picker is live for the channel, mark it so the refresh loop bumps a fresh
+    copy to the bottom (keeping the active prompt as the newest message).
+    """
+    session = _active.get(channel_id)
+    if session is not None:
+        session.buried = True
 
 
 def session_for_window(window_id: str) -> InteractiveSession | None:
@@ -285,11 +305,17 @@ async def enter_interactive_mode(
 
     existing = _active.get(channel_id)
     if existing is not None and existing.window_id == window_id:
-        # Re-trigger for the same window — just update tool metadata, refresh
-        # the message, and keep the refresh loop running.
+        # Re-trigger for the same window. A genuinely new prompt (different
+        # tool_use_id) or a picker buried by later output is reposted at the
+        # channel bottom so the active prompt stays the newest message and the
+        # old message (with its now-stale buttons) is deleted. Otherwise the
+        # existing message is edited in place as the pane moves.
+        is_new_prompt = bool(tool_use_id) and tool_use_id != existing.tool_use_id
         existing.tool_use_id = tool_use_id or existing.tool_use_id
         existing.tool_name = tool_name or existing.tool_name
-        if digest != existing.last_pane_hash:
+        if is_new_prompt or existing.buried:
+            await _repost_at_bottom(client, existing, pane=pane, now=now)
+        elif digest != existing.last_pane_hash:
             existing.last_pane_hash = digest
             existing.last_change_at = now
             await _safe_update(
@@ -431,6 +457,52 @@ async def exit_for_window(
     return await exit_interactive_mode(client, target_channel, reason=reason)
 
 
+async def _repost_at_bottom(
+    client: SlackClient,
+    session: InteractiveSession,
+    *,
+    pane: str,
+    now: float,
+) -> None:
+    """Move the picker to the channel bottom: delete the old message, post fresh.
+
+    Deleting the old message also strips its (now-stale) key buttons, so a click
+    can never drive the live pane from a buried copy. The refresh task keeps
+    running against the session's new ``message_ts``.
+    """
+    old_ts = session.message_ts
+    blocks, fallback = _build_blocks(
+        window_id=session.window_id,
+        tool_name=session.tool_name,
+        pane=pane,
+        started_at=session.started_at,
+    )
+    try:
+        result = await client.chat_postMessage(
+            channel=session.channel_id, text=fallback, blocks=blocks
+        )
+    except SlackApiError as exc:
+        logger.debug(
+            "interactive: bump repost failed (%s); keeping in place",
+            exc.response.get("error") if exc.response else exc,
+        )
+        return
+    new_ts = _result_ts(result)
+    if not new_ts:
+        return
+    session.message_ts = new_ts
+    session.last_pane_hash = _hash_pane(pane)
+    session.last_change_at = now
+    session.buried = False
+    session.last_bump_at = now
+    # Remove the old copy (best-effort; falls back to a buttonless stub).
+    from ..slack_sender import safe_close_message
+
+    await safe_close_message(
+        client, channel=session.channel_id, ts=old_ts, label="picker (moved)"
+    )
+
+
 async def _close_session(
     client: SlackClient,
     session: InteractiveSession,
@@ -490,6 +562,11 @@ async def _refresh_loop(client: SlackClient, channel_id: str) -> None:
         pane = await _capture_pane_snippet(session.window_id)
         digest = _hash_pane(pane)
         now = time.monotonic()
+        # Buried by later output → repost at the bottom (throttled so a burst of
+        # streamed output can't spawn a message per tick).
+        if session.buried and now - session.last_bump_at >= MIN_BUMP_INTERVAL:
+            await _repost_at_bottom(client, session, pane=pane, now=now)
+            continue
         if digest != session.last_pane_hash:
             session.last_pane_hash = digest
             session.last_change_at = now
@@ -603,6 +680,7 @@ __all__ = [
     "handle_notification",
     "is_in_interactive_mode",
     "maybe_exit_for_tool_result",
+    "note_channel_post",
     "register",
     "session_for_window",
 ]
