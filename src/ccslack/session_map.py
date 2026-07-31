@@ -610,8 +610,10 @@ class SessionMapSync:
         # window (e.g. codex once owned @9729, then claude took over). The
         # transcript path is observed reality and wins; without this guard the
         # transcript_reader spams "Provider mismatch" warnings every poll.
+        # Also infers provider from path when session_map has no provider_name
+        # (old entries written before the field existed).
         path_for_inference = new_transcript or state.transcript_path
-        if new_provider and path_for_inference:
+        if path_for_inference:
             # Lazy: providers import pulls the agent provider registry which
             # imports the shell provider's prompt-marker machinery; defer.
             from .providers import detect_provider_from_transcript_path
