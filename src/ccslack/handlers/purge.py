@@ -274,6 +274,82 @@ async def purge(
         selected = entries
     deleted = await _delete_entries(client, channel_id, selected)
     _drop_entries(channel_id, {e["ts"] for e in selected})
+    if count is None and since_seconds is None:
+        deleted += await _purge_scan_history(client, channel_id)
+    return deleted
+
+
+def _status_preserved_ts(channel_id: str) -> set[str]:
+    """Return the ts set that must survive a history scan (the status message)."""
+    # Lazy: thread_router / window_store import purge indirectly via session
+    # lifecycle — top-level import would create a cycle.
+    from ..thread_router import thread_router
+    from ..window_state_store import window_store
+
+    preserved: set[str] = set()
+    window_id = thread_router.get_window_for_channel(channel_id)
+    if window_id:
+        state = window_store.window_states.get(window_id)
+        if state and state.status_message_ts:
+            preserved.add(state.status_message_ts)
+    return preserved
+
+
+async def _scan_history_page(
+    client: SlackClient,
+    channel_id: str,
+    bot_id: str,
+    preserved: set[str],
+    cursor: str | None,
+) -> tuple[int, str | None]:
+    """Fetch one page of history, delete matching bot messages, return (count, next_cursor)."""
+    kwargs: dict[str, Any] = {"channel": channel_id, "limit": 200}
+    if cursor:
+        kwargs["cursor"] = cursor
+    result = await client.conversations_history(**kwargs)
+    messages = (result.get("messages") or []) if result else []
+    deleted = 0
+    for msg in messages:
+        ts = msg.get("ts", "")
+        if not ts or ts in preserved or msg.get("bot_id") != bot_id:
+            continue
+        await _delete_one_message(client, channel_id, ts)
+        deleted += 1
+        await asyncio.sleep(_DELETE_INTERVAL)
+    next_cursor: str | None = None
+    if result and result.get("has_more"):
+        next_cursor = (result.get("response_metadata") or {}).get("next_cursor") or None
+    return deleted, next_cursor
+
+
+async def _purge_scan_history(client: SlackClient, channel_id: str) -> int:
+    """Scan channel history and delete unrecorded bot messages (historical orphans).
+
+    Fetches all messages posted by this bot in the channel and deletes any
+    not in the preserved set (the pinned status message). Catches messages
+    that predate the ledger or were posted without a record() call.
+    """
+    try:
+        auth = await client.auth_test()
+        bot_id = (auth.get("bot_id") or "") if auth else ""
+    except SlackApiError:
+        return 0
+    if not bot_id:
+        return 0
+
+    preserved = _status_preserved_ts(channel_id)
+    deleted = 0
+    cursor: str | None = None
+    while True:
+        try:
+            count, cursor = await _scan_history_page(
+                client, channel_id, bot_id, preserved, cursor
+            )
+            deleted += count
+        except SlackApiError:
+            break
+        if not cursor:
+            break
     return deleted
 
 
