@@ -10,7 +10,7 @@ import structlog.contextvars
 
 from ... import session_query, window_query
 from ...session_monitor import NewMessage
-from ...slack_sender import safe_post, safe_update
+from ...slack_sender import MAX_POST_CHARS, safe_post, safe_send_long, safe_update
 
 if TYPE_CHECKING:
     from ...slack_client import SlackClient
@@ -139,7 +139,10 @@ async def _pre_post_suppressed(
     # Interactive prompts fire BEFORE any mute gate: the picker is how the agent
     # gets unblocked, so suppressing it (even in `silent`) would deadlock the
     # session — nothing would ever "resume" no matter the notify mode.
-    if msg.content_type == "tool_use" and (msg.tool_name or "") in INTERACTIVE_TOOL_NAMES:
+    if (
+        msg.content_type == "tool_use"
+        and (msg.tool_name or "") in INTERACTIVE_TOOL_NAMES
+    ):
         await enter_interactive_mode(
             client,
             channel_id=channel_id,
@@ -173,7 +176,9 @@ async def _pre_post_suppressed(
     if msg.content_type in ("tool_use", "tool_result"):
         detail = window_query.resolved_toolcall_detail(window_id)
         # hidden → drop the whole chain; calls → keep the call, drop its result.
-        if detail == "hidden" or (detail == "calls" and msg.content_type == "tool_result"):
+        if detail == "hidden" or (
+            detail == "calls" and msg.content_type == "tool_result"
+        ):
             logger.debug(
                 "Tool detail=%s for window %s; skipping %s",
                 detail,
@@ -298,11 +303,7 @@ async def _route_to_channel(
 
     # Offer a "Show files" button when a final answer names real project files.
     # Skip pre-tool-call narration (commentary) — only the answer is scanned.
-    if (
-        msg.role != "user"
-        and msg.content_type == "text"
-        and msg.phase != "commentary"
-    ):
+    if msg.role != "user" and msg.content_type == "text" and msg.phase != "commentary":
         from ..file_refs import maybe_offer_file_refs
 
         await maybe_offer_file_refs(client, channel_id, text)
@@ -410,8 +411,26 @@ async def _post_or_pair(
                     return prior_ts
         # No memo or chat.update failed — fall through to fresh post.
 
-    ts = await safe_post(client, channel=channel_id, text=decorated, thread_ts=thread_ts)
     kind = _purge_kind(msg)
+    if len(decorated) > MAX_POST_CHARS:
+        # Long messages are split into multiple posts; record every part so
+        # purge can delete them all, not just the first chunk.
+        all_ts = await safe_send_long(
+            client, channel=channel_id, text=decorated, thread_ts=thread_ts
+        )
+        for i, split_ts in enumerate(all_ts):
+            purge.record(
+                channel_id,
+                split_ts,
+                thread_ts=thread_ts,
+                kind=kind,
+                # Only store echo text on the first part (used for annotation).
+                text=decorated if (kind == "echo" and i == 0) else None,
+            )
+        return all_ts[0] if all_ts else None
+    ts = await safe_post(
+        client, channel=channel_id, text=decorated, thread_ts=thread_ts
+    )
     # Keep the echo's text so a purge can annotate it in place (not delete it).
     purge.record(
         channel_id,
