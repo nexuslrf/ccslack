@@ -8,10 +8,20 @@ from ccslack.handlers.send import (
     _find_files,
     _human_size,
     _is_image,
+    _post_picker,
     _safe_relative,
     _walk_filtered,
 )
 from ccslack.handlers.send_security import validate_sendable
+from ccslack.slack_client import FakeSlackClient
+
+
+def _action_ids(blocks: list[dict]) -> list[str]:
+    ids: list[str] = []
+    for b in blocks:
+        for el in b.get("elements", []):
+            ids.append(el.get("action_id", ""))
+    return ids
 
 
 @pytest.fixture
@@ -122,3 +132,11 @@ def test_human_size_formats():
     assert _human_size(500) == "0 KB" or _human_size(500).endswith("KB")
     assert _human_size(2 * 1024 * 1024) == "2.0 MB"
     assert _human_size(12 * 1024 * 1024) == "12.0 MB"
+
+
+@pytest.mark.asyncio
+async def test_picker_listing_has_close_button(tree: Path):
+    client = FakeSlackClient()
+    await _post_picker(client, "C1", "U1", [tree / "notes.txt"], tree)
+    eph = client.last_call("chat_postEphemeral")
+    assert "ccslack_send_cancel" in _action_ids(eph.kwargs["blocks"])

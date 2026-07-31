@@ -339,25 +339,31 @@ async def _post_picker(
     for i in range(0, len(buttons), _MAX_PICKER_BUTTONS):
         blocks.append({"type": "actions", "elements": buttons[i : i + 25]})
 
+    controls: list[dict[str, Any]] = []
     if len(matches) <= _UPLOAD_ALL_LIMIT:
-        blocks.append(
+        controls.append(
             {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "action_id": "ccslack_send_all",
-                        "style": "primary",
-                        "text": {
-                            "type": "plain_text",
-                            "text": f":inbox_tray: Upload all {len(matches)}",
-                        },
-                        # Value carries newline-joined absolute paths.
-                        "value": "\n".join(str(p.resolve()) for p in matches)[:1990],
-                    }
-                ],
+                "type": "button",
+                "action_id": "ccslack_send_all",
+                "style": "primary",
+                "text": {
+                    "type": "plain_text",
+                    "text": f":inbox_tray: Upload all {len(matches)}",
+                },
+                # Value carries newline-joined absolute paths.
+                "value": "\n".join(str(p.resolve()) for p in matches)[:1990],
             }
         )
+    # Close dismisses the ephemeral listing (shared ccslack_send_cancel action).
+    controls.append(
+        {
+            "type": "button",
+            "action_id": "ccslack_send_cancel",
+            "text": {"type": "plain_text", "text": ":x: Close"},
+            "value": "cancel",
+        }
+    )
+    blocks.append({"type": "actions", "elements": controls})
 
     await _ephemeral(
         client,
