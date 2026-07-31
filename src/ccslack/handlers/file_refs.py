@@ -128,8 +128,10 @@ def find_file_refs(text: str, cwd: Path) -> list[Path]:
         path = _resolve(tok, cwd)
         # Cheap gate first: must be an in-cwd, non-hidden regular file.
         try:
-            if not path.is_file() or not is_path_contained(path, cwd) or is_hidden(
-                path, cwd
+            if (
+                not path.is_file()
+                or not is_path_contained(path, cwd)
+                or is_hidden(path, cwd)
             ):
                 continue
         except OSError:
@@ -172,7 +174,9 @@ async def maybe_offer_file_refs(
     _remember(token, channel_id, paths)
     count = len(paths)
     label = "1 file" if count == 1 else f"{count} files"
-    await safe_post(
+    from . import purge
+
+    ts = await safe_post(
         client,
         channel=channel_id,
         text=f":open_file_folder: The message above references {label}.",
@@ -195,7 +199,10 @@ async def maybe_offer_file_refs(
                         "type": "button",
                         "action_id": "ccslack_show_files",
                         "style": "primary",
-                        "text": {"type": "plain_text", "text": ":page_facing_up: Show files"},
+                        "text": {
+                            "type": "plain_text",
+                            "text": ":page_facing_up: Show files",
+                        },
                         "value": token,
                     },
                     {
@@ -208,6 +215,7 @@ async def maybe_offer_file_refs(
             },
         ],
     )
+    purge.record(channel_id, ts, kind="control")
 
 
 def _button_token(body: dict, action_id: str) -> str:

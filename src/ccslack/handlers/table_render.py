@@ -90,7 +90,12 @@ def find_table_blocks(text: str) -> list[str]:
             header = lines[i - 1]
             data: list[str] = []
             j = i + 1
-            while j < n and "|" in lines[j] and lines[j].strip() and not _FENCE_RE.match(lines[j]):
+            while (
+                j < n
+                and "|" in lines[j]
+                and lines[j].strip()
+                and not _FENCE_RE.match(lines[j])
+            ):
                 data.append(lines[j])
                 j += 1
             if data:  # a header+delimiter with no rows isn't worth rendering
@@ -162,7 +167,7 @@ async def render_tables_png(blocks: list[str]) -> bytes | None:
 
     try:
         return await text_to_image(monospace, with_ansi=False)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         logger.exception("table_render: text_to_image failed")
         return None
 
@@ -188,7 +193,9 @@ async def maybe_offer_table_render(
     _remember(token, channel_id, blocks)
     count = len(blocks)
     label = "table" if count == 1 else f"{count} tables"
-    await safe_post(
+    from . import purge
+
+    ts = await safe_post(
         client,
         channel=channel_id,
         text=f":bar_chart: Detected a markdown {label} — render as an image?",
@@ -211,7 +218,10 @@ async def maybe_offer_table_render(
                         "type": "button",
                         "action_id": "ccslack_render_table",
                         "style": "primary",
-                        "text": {"type": "plain_text", "text": ":frame_with_picture: Render image"},
+                        "text": {
+                            "type": "plain_text",
+                            "text": ":frame_with_picture: Render image",
+                        },
                         "value": token,
                     },
                     {
@@ -224,6 +234,7 @@ async def maybe_offer_table_render(
             },
         ],
     )
+    purge.record(channel_id, ts, kind="control")
 
 
 def _button_token(body: dict, action_id: str) -> str:
