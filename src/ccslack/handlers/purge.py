@@ -19,6 +19,7 @@ The ledger persists to ``purge.json`` so ``autopurge`` survives a restart.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import structlog
@@ -36,6 +37,11 @@ if TYPE_CHECKING:
     from ..slack_client import SlackClient
 
 logger = structlog.get_logger()
+
+# Slack chat.delete is Tier 3 (~50/min sustained). A 0.2 s inter-delete gap
+# keeps burst bursts under the threshold; the ratelimited retry below handles
+# the rare case where a long purge still triggers a 429.
+_DELETE_INTERVAL = 0.2
 
 # Cap ledger entries kept per channel (oldest dropped) so purge.json stays small.
 _MAX_LEDGER_PER_CHANNEL = 2000
@@ -66,7 +72,7 @@ def _ensure_loaded() -> None:
         return
     try:
         raw = json.loads(config.purge_file.read_text())
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         return
     led = raw.get("ledger", {})
     if isinstance(led, dict):
@@ -160,29 +166,74 @@ def record(
 # ---------------------------------------------------------------------------
 
 
+def _retry_after(exc: SlackApiError) -> float:
+    """Extract the Retry-After seconds from a ratelimited SlackApiError."""
+    with contextlib.suppress(Exception):
+        if exc.response and hasattr(exc.response, "headers"):
+            return float(exc.response.headers.get("Retry-After", 1))
+    return 1.0
+
+
+async def _delete_one_message(client: SlackClient, channel_id: str, ts: str) -> None:
+    """Delete one message; if rate-limited, sleep and retry once."""
+    for attempt in range(2):
+        try:
+            await client.chat_delete(channel=channel_id, ts=ts)
+            return
+        except SlackApiError as exc:
+            error = exc.response.get("error") if exc.response else str(exc)
+            if error in ("message_not_found", "already_deleted"):
+                return
+            if error == "ratelimited" and attempt == 0:
+                delay = _retry_after(exc) + 0.5
+                logger.debug(
+                    "purge: rate limited on chat.delete, retrying in %.1fs", delay
+                )
+                await asyncio.sleep(delay)
+                continue
+            logger.debug("purge: chat.delete %s failed: %s", ts, error)
+            return
+
+
+async def _delete_one_file(client: SlackClient, file_id: str) -> None:
+    """Delete one file; if rate-limited, sleep and retry once."""
+    for attempt in range(2):
+        try:
+            await client.files_delete(file=file_id)
+            return
+        except SlackApiError as exc:
+            error = exc.response.get("error") if exc.response else str(exc)
+            if error in ("file_not_found", "file_deleted"):
+                return
+            if error == "ratelimited" and attempt == 0:
+                delay = _retry_after(exc) + 0.5
+                logger.debug(
+                    "purge: rate limited on files.delete, retrying in %.1fs", delay
+                )
+                await asyncio.sleep(delay)
+                continue
+            logger.debug("purge: files.delete %s failed: %s", file_id, error)
+            return
+
+
 async def _delete_entries(
     client: SlackClient, channel_id: str, entries: list[dict[str, Any]]
 ) -> int:
-    """Delete each entry's message (and its uploaded file). Best-effort count."""
+    """Delete each entry's message (and its uploaded file). Best-effort count.
+
+    Paces deletions at _DELETE_INTERVAL seconds apart to stay within Slack's
+    Tier 3 rate limit; retries once on 429 using the Retry-After header.
+    """
     deleted = 0
     for entry in entries:
         ts = entry.get("ts")
         if ts:
-            try:
-                await client.chat_delete(channel=channel_id, ts=ts)
-            except SlackApiError as exc:
-                error = exc.response.get("error") if exc.response else str(exc)
-                if error not in ("message_not_found", "already_deleted"):
-                    logger.debug("purge: chat.delete %s failed: %s", ts, error)
+            await _delete_one_message(client, channel_id, ts)
         file_id = entry.get("file")
         if file_id:
-            try:
-                await client.files_delete(file=file_id)
-            except SlackApiError as exc:
-                error = exc.response.get("error") if exc.response else str(exc)
-                if error not in ("file_not_found", "file_deleted"):
-                    logger.debug("purge: files.delete %s failed: %s", file_id, error)
+            await _delete_one_file(client, file_id)
         deleted += 1
+        await asyncio.sleep(_DELETE_INTERVAL)
     return deleted
 
 
@@ -229,7 +280,7 @@ async def purge(
 def _ts_age_ok(ts: str, cutoff: float) -> bool:
     try:
         return float(ts) >= cutoff
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return False
 
 
@@ -282,7 +333,9 @@ async def purge_thread(client: SlackClient, channel_id: str, parent_ts: str) -> 
     return deleted
 
 
-async def delete_file(client: SlackClient, channel_id: str, file_id: str, ts: str) -> None:
+async def delete_file(
+    client: SlackClient, channel_id: str, file_id: str, ts: str
+) -> None:
     """Remove an uploaded file (and its Remove-button message at *ts*)."""
     await _delete_entries(client, channel_id, [{"ts": ts, "file": file_id}])
     if ts:
