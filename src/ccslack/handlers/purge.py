@@ -272,7 +272,25 @@ async def purge(
         selected = entries[-count:]
     else:
         selected = entries
-    deleted = await _delete_entries(client, channel_id, selected)
+    deleted = 0
+
+    # On a full purge, sweep orphan replies inside ledger-known thread parents
+    # BEFORE deleting the parents. conversations.replies requires the parent to
+    # still exist; if we delete the parent first the replies become unreachable.
+    if count is None and since_seconds is None:
+        thread_parents = [e["ts"] for e in selected if e.get("kind") == "thread_parent"]
+        if thread_parents:
+            bot_id = ""
+            with contextlib.suppress(SlackApiError):
+                auth = await client.auth_test()
+                bot_id = (auth.get("bot_id") or "") if auth else ""
+            if bot_id:
+                for parent_ts in thread_parents:
+                    deleted += await _delete_thread_replies(
+                        client, channel_id, parent_ts, bot_id
+                    )
+
+    deleted += await _delete_entries(client, channel_id, selected)
     _drop_entries(channel_id, {e["ts"] for e in selected})
     if count is None and since_seconds is None:
         deleted += await _purge_scan_history(client, channel_id)
