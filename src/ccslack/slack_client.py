@@ -81,6 +81,10 @@ class SlackClient(Protocol):
         self, *, channel: str, **kwargs: Any
     ) -> AsyncSlackResponse: ...
 
+    async def conversations_replies(
+        self, *, channel: str, ts: str, **kwargs: Any
+    ) -> AsyncSlackResponse: ...
+
     async def conversations_list(self, **kwargs: Any) -> AsyncSlackResponse: ...
 
     async def auth_test(self, **kwargs: Any) -> AsyncSlackResponse: ...
@@ -221,6 +225,11 @@ class BoltSlackClient:
         self, *, channel: str, **kwargs: Any
     ) -> AsyncSlackResponse:
         return await self._web.conversations_history(channel=channel, **kwargs)
+
+    async def conversations_replies(
+        self, *, channel: str, ts: str, **kwargs: Any
+    ) -> AsyncSlackResponse:
+        return await self._web.conversations_replies(channel=channel, ts=ts, **kwargs)
 
     async def conversations_list(self, **kwargs: Any) -> AsyncSlackResponse:
         return await self._web.conversations_list(**kwargs)
@@ -427,6 +436,13 @@ class FakeSlackClient:
 
     async def conversations_history(self, *, channel: str, **kwargs: Any) -> Any:
         return self._record("conversations_history", {"channel": channel, **kwargs})
+
+    async def conversations_replies(
+        self, *, channel: str, ts: str, **kwargs: Any
+    ) -> Any:
+        return self._record(
+            "conversations_replies", {"channel": channel, "ts": ts, **kwargs}
+        )
 
     async def conversations_list(self, **kwargs: Any) -> Any:
         return self._record("conversations_list", {**kwargs})

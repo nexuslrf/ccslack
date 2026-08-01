@@ -295,6 +295,42 @@ def _status_preserved_ts(channel_id: str) -> set[str]:
     return preserved
 
 
+async def _delete_thread_replies(
+    client: SlackClient, channel_id: str, thread_ts: str, bot_id: str
+) -> int:
+    """Delete all bot-owned replies in a thread (cursor-paginated).
+
+    ``conversations.replies`` always includes the parent as the first message;
+    skip it here since the caller already handled the parent.
+    """
+    deleted = 0
+    cursor: str | None = None
+    while True:
+        kwargs: dict[str, Any] = {"channel": channel_id, "ts": thread_ts, "limit": 200}
+        if cursor:
+            kwargs["cursor"] = cursor
+        try:
+            result = await client.conversations_replies(**kwargs)
+        except SlackApiError:
+            break
+        messages = (result.get("messages") or []) if result else []
+        for msg in messages:
+            ts = msg.get("ts", "")
+            if not ts or ts == thread_ts:
+                continue  # skip the parent (always first in the list)
+            if msg.get("bot_id") != bot_id:
+                continue
+            await _delete_one_message(client, channel_id, ts)
+            deleted += 1
+            await asyncio.sleep(_DELETE_INTERVAL)
+        if not result or not result.get("has_more"):
+            break
+        cursor = (result.get("response_metadata") or {}).get("next_cursor") or None
+        if not cursor:
+            break
+    return deleted
+
+
 async def _scan_history_page(
     client: SlackClient,
     channel_id: str,
@@ -316,6 +352,9 @@ async def _scan_history_page(
         await _delete_one_message(client, channel_id, ts)
         deleted += 1
         await asyncio.sleep(_DELETE_INTERVAL)
+        # Also sweep any thread replies that conversations.history doesn't return.
+        if msg.get("reply_count", 0) > 0:
+            deleted += await _delete_thread_replies(client, channel_id, ts, bot_id)
     next_cursor: str | None = None
     if result and result.get("has_more"):
         next_cursor = (result.get("response_metadata") or {}).get("next_cursor") or None
