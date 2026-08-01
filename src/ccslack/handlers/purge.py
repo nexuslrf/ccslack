@@ -263,8 +263,6 @@ async def purge(
     """
     _ensure_loaded()
     entries = list(_ledger.get(channel_id, []))
-    if not entries:
-        return 0
     if since_seconds is not None:
         cutoff = time.time() - since_seconds
         selected = [e for e in entries if _ts_age_ok(e["ts"], cutoff)]
@@ -290,8 +288,9 @@ async def purge(
                         client, channel_id, parent_ts, bot_id
                     )
 
-    deleted += await _delete_entries(client, channel_id, selected)
-    _drop_entries(channel_id, {e["ts"] for e in selected})
+    if selected:
+        deleted += await _delete_entries(client, channel_id, selected)
+        _drop_entries(channel_id, {e["ts"] for e in selected})
     if count is None and since_seconds is None:
         deleted += await _purge_scan_history(client, channel_id)
     return deleted
