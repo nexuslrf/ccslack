@@ -122,6 +122,12 @@ class SessionLifecycle:
         claude_task_state.clear_window(window_id)
         clear_subagents(window_id)
         window_store.clear_window_session(window_id)
+        # Also clear the session_map.json entry so load_session_map() doesn't
+        # restore the stale session_id before hookless discovery can run.
+        # Lazy: session_map imports session_lifecycle types transitively.
+        from .session_map import session_map_sync
+
+        session_map_sync.clear_session_map_entry(window_id)
 
     # ── Hook-event mutation authority ────────────────────────────────────────
 

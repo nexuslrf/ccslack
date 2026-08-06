@@ -94,7 +94,9 @@ def _channel_name_for(cwd: Path) -> str:
     default ``ccslack``). An empty prefix yields just the cwd slug.
     """
     slug = _sanitize_channel_name(cwd.name)
-    prefix = _sanitize_channel_name(config.channel_prefix) if config.channel_prefix else ""
+    prefix = (
+        _sanitize_channel_name(config.channel_prefix) if config.channel_prefix else ""
+    )
     return f"{prefix}-{slug}" if prefix else slug
 
 
@@ -318,7 +320,9 @@ def register(app: AsyncApp) -> None:
             return
 
         if sub in ("adduser", "removeuser"):
-            await _handle_grant(client, channel_id, user_id, args, grant=sub == "adduser")
+            await _handle_grant(
+                client, channel_id, user_id, args, grant=sub == "adduser"
+            )
             return
 
         if sub == "users":
@@ -653,9 +657,7 @@ async def _handle_new(
             created_worktree_branch = branch
 
     # Spawn tmux window first — fail fast if tmux isn't reachable.
-    launch_command = (
-        None if provider == "shell" else resolve_launch_command(provider)
-    )
+    launch_command = None if provider == "shell" else resolve_launch_command(provider)
     success, message, window_name, window_id = await tmux_manager.create_window(
         work_dir=str(spawn_dir),
         window_name=_sanitize_channel_name(spawn_dir.name),
@@ -1603,8 +1605,7 @@ async def _handle_users(client, channel_id: str, user_id: str) -> None:  # noqa:
     if grants:
         listing = ", ".join(f"<@{u}>" for u in grants)
         text = (
-            f"Granted in this session: {listing}\n"
-            "(plus everyone in `ALLOWED_USERS`)."
+            f"Granted in this session: {listing}\n(plus everyone in `ALLOWED_USERS`)."
         )
     else:
         text = (
@@ -1887,6 +1888,7 @@ async def _kill_one(client, channel_id: str, window_id: str) -> str:  # noqa: AN
     thread_router.clear_chat_threads(channel_id)
     thread_router.clear_channel_grants(channel_id)
     from .purge import forget_channel as _purge_forget
+
     _purge_forget(channel_id)
 
     try:
@@ -2219,7 +2221,9 @@ async def _handle_manual(
             f"by @-mentioning me or `{slash} run <prompt>`."
         )
     else:
-        label = ":speech_balloon: *auto* — every message is sent to the agent (default)."
+        label = (
+            ":speech_balloon: *auto* — every message is sent to the agent (default)."
+        )
     await _post_ephemeral(
         client.chat_postEphemeral,
         channel=channel_id,
@@ -2480,7 +2484,9 @@ def _relaunch_cmd(
     from .recovery import _build_launch_args_for
 
     base = resolve_launch_command(provider)
-    resume = _build_launch_args_for(provider, session_id, "fresh" if fresh else "continue")
+    resume = _build_launch_args_for(
+        provider, session_id, "fresh" if fresh else "continue"
+    )
     custom = " ".join(shlex.quote(a) for a in custom_args)
     return " ".join(part for part in (base, resume, custom) if part).strip()
 
@@ -2543,9 +2549,7 @@ async def _handle_relaunch(
     _PENDING_RELAUNCH[window_id] = full_cmd
 
     continuity = (
-        "Starts a *fresh* session."
-        if fresh
-        else "The current conversation continues."
+        "Starts a *fresh* session." if fresh else "The current conversation continues."
     )
     header = (
         f":arrows_counterclockwise: *Relaunch `{provider}`?*\n"
@@ -2641,6 +2645,14 @@ def register_relaunch_actions(app) -> None:  # noqa: ANN001
                     blocks=[],
                 )
             return
+
+        # Clear the old session binding before the new agent starts so hookless
+        # providers (Codex tui_app_server) don't stay gated on the stale session.
+        from ..session_map import session_map_sync as _sms
+        from ..window_state_store import window_store as _ws
+
+        _ws.clear_window_session(window_id)
+        _sms.clear_session_map_entry(window_id)
 
         await tmux_manager.send_keys(window_id, full_cmd, literal=False, enter=True)
 
