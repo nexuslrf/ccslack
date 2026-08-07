@@ -75,6 +75,24 @@ def test_parse_workers_skips_malformed_and_dups():
     assert [s.host for s in specs] == ["gpu1"]
 
 
+def test_parse_workers_per_worker_port_override():
+    specs = parse_workers("w1=node:8765,w2=node:8766", 8765)
+    assert [(s.host, s.ssh_target, s.remote_port) for s in specs] == [
+        ("w1", "node", 8765),
+        ("w2", "node", 8766),
+    ]
+
+
+def test_parse_workers_port_override_with_user_at_host():
+    specs = parse_workers("w1=user@node:8766", 8765)
+    assert (specs[0].ssh_target, specs[0].remote_port) == ("user@node", 8766)
+
+
+def test_parse_workers_non_numeric_colon_tail_is_not_a_port():
+    specs = parse_workers("w1=user@node", 8765)
+    assert (specs[0].ssh_target, specs[0].remote_port) == ("user@node", 8765)
+
+
 def test_ssh_tunnel_command_shape():
     tunnel = SshTunnel("user@gpu1", remote_port=8765)
     cmd = tunnel.build_command()

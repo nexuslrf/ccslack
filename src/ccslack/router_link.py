@@ -60,11 +60,13 @@ class WorkerSpec:
 
 
 def parse_workers(raw: str, default_port: int) -> list[WorkerSpec]:
-    """Parse ``CCSLACK_WORKERS`` (``host=ssh_target`` entries, comma-separated).
+    """Parse ``CCSLACK_WORKERS`` (``host=ssh_target[:port]`` entries, comma-sep).
 
     ``ssh_target`` is whatever ``ssh <target>`` resolves — a ``~/.ssh/config``
-    alias or ``user@host`` — so all SSH auth/proxy config is the user's. Each
-    worker's link server is assumed on ``default_port`` (``CCSLACK_LINK_PORT``).
+    alias or ``user@host`` — so all SSH auth/proxy config is the user's. An
+    optional trailing ``:port`` overrides the worker's link port for that entry
+    (``default_port`` / ``CCSLACK_LINK_PORT`` otherwise). Use it to co-locate
+    two workers on one host: ``w1=node:8765,w2=node:8766``.
     """
     specs: list[WorkerSpec] = []
     seen: set[str] = set()
@@ -80,8 +82,14 @@ def parse_workers(raw: str, default_port: int) -> list[WorkerSpec]:
         if host in seen:
             logger.warning("CCSLACK_WORKERS: duplicate host %r ignored", host)
             continue
+        # Optional trailing ``:port`` on the target overrides the link port. Only
+        # a purely-numeric tail counts — an ssh alias/``user@host`` has no colon.
+        remote_port = default_port
+        head, colon, tail = target.rpartition(":")
+        if colon and head and tail.isdigit():
+            target, remote_port = head, int(tail)
         seen.add(host)
-        specs.append(WorkerSpec(host=host, ssh_target=target, remote_port=default_port))
+        specs.append(WorkerSpec(host=host, ssh_target=target, remote_port=remote_port))
     return specs
 
 

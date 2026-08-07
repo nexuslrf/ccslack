@@ -70,7 +70,7 @@ New env vars (full reference in [configuration.md](configuration.md#multi-host-r
 |---|---|---|---|
 | `CCSLACK_HOST` | hostname | all | This machine's name in the fleet (shown in `list`, used by `--host`). |
 | `CCSLACK_LINK_PORT` | `8765` | worker | Localhost port the worker's link server listens on (reached by the router over the tunnel). |
-| `CCSLACK_WORKERS` | empty | router | Comma-separated `host=ssh_target` entries, e.g. `gpu1=user@gpu1,gpu2=gpu2-alias`. Empty = single-host router. |
+| `CCSLACK_WORKERS` | empty | router | Comma-separated `host=ssh_target[:port]` entries, e.g. `gpu1=user@gpu1,gpu2=gpu2-alias`. Empty = single-host router. The optional trailing `:port` overrides that worker's link port (default `CCSLACK_LINK_PORT`) — use it to co-locate two workers on one host. |
 
 ---
 
@@ -128,6 +128,26 @@ channel.
 > server through the SSH tunnel (`127.0.0.1:8765` *on the worker*), so the port
 > never needs to be exposed on the network — SSH is the only ingress a worker
 > needs.
+
+> **Two workers on one host.** Each worker's link server binds
+> `127.0.0.1:CCSLACK_LINK_PORT`, so two workers on the *same* host clash on the
+> default `8765` (`OSError: [Errno 98] address already in use`). Give each its
+> own port and tell the router about both with the per-entry `:port` suffix:
+>
+> ```bash
+> # on the shared host — two worker processes
+> CCSLACK_LINK_PORT=8765 uv run ccslack worker
+> CCSLACK_LINK_PORT=8766 uv run ccslack worker
+> ```
+> ```ini
+> # on the router — same ssh target, distinct names + ports
+> CCSLACK_WORKERS=nodeA=user@node, nodeB=user@node:8766
+> ```
+>
+> The router opens one SSH tunnel per entry (`-L <local>:127.0.0.1:8765` and
+> `-L <local>:127.0.0.1:8766`), so each name maps to its own worker. Prefer one
+> worker per host where you can — co-location only makes sense when a single
+> host serves multiple projects/CWDs you want isolated.
 
 ---
 
