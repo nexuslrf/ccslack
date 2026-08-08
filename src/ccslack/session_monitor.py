@@ -358,8 +358,15 @@ class SessionMonitor:
             caps = provider.capabilities
             if not caps.supports_hookless_discovery:
                 continue
+            # When re-discovering (a session is already tracked), skip the
+            # provider's default max-age cut-off so we can find the running
+            # session even if it has been idle for longer than 120 s.
+            rediscovery = bool(state and state.session_id)
             event = await asyncio.to_thread(
-                provider.discover_transcript, window.cwd, window_id
+                provider.discover_transcript,
+                window.cwd,
+                window_id,
+                **{"max_age": 0} if rediscovery else {},
             )
             if event is None:
                 continue
