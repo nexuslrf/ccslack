@@ -567,6 +567,23 @@ def _prefer_duplicate_message(previous: AgentMessage, candidate: AgentMessage) -
 _TRANSCRIPT_MAX_AGE_SECS = 120.0
 
 
+def _cwd_matches(
+    file_cwd: str, resolved_project_cwd: str, worktrees_root: Path
+) -> bool:
+    """True if file_cwd is the project cwd or a Codex worktree of it.
+
+    Worktree layout: ~/.codex/worktrees/<hash>/<project-name>
+    """
+    resolved_file = str(Path(file_cwd).resolve())
+    if resolved_file == resolved_project_cwd:
+        return True
+    try:
+        rel = Path(resolved_file).relative_to(worktrees_root)
+        return len(rel.parts) == 2 and rel.parts[1] == Path(resolved_project_cwd).name  # noqa: PLR2004
+    except ValueError:
+        return False
+
+
 def _collect_codex_sessions(sessions_dir: Path) -> list[tuple[float, Path]]:
     """Collect all JSONL files under sessions_dir, sorted newest-first by mtime."""
     result: list[tuple[float, Path]] = []
@@ -822,6 +839,7 @@ class CodexProvider(JsonlProvider):
         jsonl_files = _collect_codex_sessions(sessions_dir)
         now = time.time()
         resolved_cwd = str(Path(cwd).resolve())
+        worktrees_root = Path.home() / ".codex" / "worktrees"
         for mtime, fpath in jsonl_files[:20]:
             if age_limit > 0 and now - mtime > age_limit:
                 break  # sorted newest-first; remaining are all older
@@ -831,7 +849,7 @@ class CodexProvider(JsonlProvider):
             if not _is_primary_codex_session(meta):
                 continue
             file_cwd = meta.get("cwd", "")
-            if file_cwd and str(Path(file_cwd).resolve()) == resolved_cwd:
+            if file_cwd and _cwd_matches(file_cwd, resolved_cwd, worktrees_root):
                 session_id = meta.get("id", "")
                 if session_id:
                     return SessionStartEvent(
