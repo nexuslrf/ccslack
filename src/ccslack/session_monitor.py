@@ -60,6 +60,8 @@ _BACKOFF_MAX = 30.0
 # consider the session still active and refuse to switch to a newer one.
 # Matches discover_transcript's own max-age so the two thresholds agree.
 _HOOKLESS_SWITCH_GRACE = 120.0
+# Rediscovery age cap: find sessions idle up to 24 h, but not ancient ones.
+_HOOKLESS_REDISCOVERY_MAX_AGE = 86400.0
 _MSG_PREVIEW_LENGTH = 80
 
 logger = structlog.get_logger()
@@ -358,20 +360,34 @@ class SessionMonitor:
             caps = provider.capabilities
             if not caps.supports_hookless_discovery:
                 continue
-            # When re-discovering (a session is already tracked), skip the
-            # provider's default max-age cut-off so we can find the running
-            # session even if it has been idle for longer than 120 s.
+            # When re-discovering (a session is already tracked), raise the
+            # provider's default 120 s age cap to 24 h so we can find a
+            # session that has been idle but is still the correct one.
+            # Unlimited (0) is intentionally avoided: it lets ancient sessions
+            # surface and causes multiple same-cwd windows to race.
             rediscovery = bool(state and state.session_id)
             event = await asyncio.to_thread(
                 provider.discover_transcript,
                 window.cwd,
                 window_id,
-                **{"max_age": 0} if rediscovery else {},
+                **{"max_age": _HOOKLESS_REDISCOVERY_MAX_AGE} if rediscovery else {},
             )
             if event is None:
                 continue
             if state and state.session_id == event.session_id:
                 continue  # already tracking this session — no change
+            # Don't claim a session already tracked by another bound window.
+            # Multiple windows with the same cwd would otherwise race to own
+            # the newest session, causing random cross-channel message leakage.
+            already_claimed = any(
+                other_ws.session_id == event.session_id
+                for other_wid, other_ws in window_store.window_states.items()
+                if other_wid != window_id
+                and other_ws.session_id
+                and thread_router.has_window(other_wid)
+            )
+            if already_claimed:
+                continue
             # Don't switch away from an active session: if the current
             # transcript is still being written to (mtime < grace period),
             # keep it. This stops fork oscillation while still allowing
