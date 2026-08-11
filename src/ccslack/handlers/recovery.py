@@ -307,10 +307,13 @@ async def restore_in_channel(
         return None
 
     # Drop the old window's binding/state (if any), then bind the channel to
-    # the freshly spawned window.
+    # the freshly spawned window.  Kill the old tmux window so it doesn't
+    # accumulate as an orphaned "imaginaire4-2" tab.
     thread_router.unbind_channel(channel_id)
     if old_window_id:
         window_store.remove_window(old_window_id)
+        with contextlib.suppress(OSError, RuntimeError):
+            await tmux_manager.kill_window(old_window_id)
     thread_router.bind_channel(
         channel_id, new_window_id, window_name=new_window_name or name
     )
@@ -550,6 +553,7 @@ async def _archive(
     thread_router.clear_chat_threads(channel_id)
     thread_router.clear_channel_grants(channel_id)
     from .purge import forget_channel as _purge_forget
+
     _purge_forget(channel_id)
     message_ts = (body.get("message") or {}).get("ts")
     if message_ts:

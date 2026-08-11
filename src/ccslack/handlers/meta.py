@@ -248,6 +248,7 @@ def register(app: AsyncApp) -> None:
             "manual",
             "run",
             "commentary",
+            "cleanup",
             "chat",
             "here",
             "adduser",
@@ -421,6 +422,10 @@ def register(app: AsyncApp) -> None:
 
         if sub == "commentary":
             await _handle_commentary(client, channel_id, user_id, args)
+            return
+
+        if sub == "cleanup":
+            await _handle_cleanup(client, channel_id, user_id)
             return
 
         await _post_ephemeral(
@@ -2584,6 +2589,60 @@ async def _handle_relaunch(
                 ],
             },
         ],
+    )
+
+
+async def _handle_cleanup(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+) -> None:
+    """``/ccslack cleanup`` — kill all orphaned tmux windows in the managed session.
+
+    Removes every window in the ccslack tmux session that is not currently
+    bound to a Slack channel. Useful for clearing accumulated
+    ``imaginaire4-2``, ``imaginaire4-3`` … tabs left behind by old
+    restores/sessions.  Only kills windows in the bot-managed session;
+    external sessions (emdash) are ignored.
+    """
+    from .auth import is_meta_authorized
+
+    if not is_meta_authorized(user_id):
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `cleanup` requires meta-channel authorization.",
+        )
+        return
+
+    bound_wids = set(thread_router.channel_bindings.values())
+    all_windows = await tmux_manager.list_windows()
+    killed: list[str] = []
+    for win in all_windows:
+        wid = win.window_id
+        if wid in bound_wids:
+            continue  # in use — leave it alone
+        if win.window_name == config.tmux_main_window_name:
+            continue  # the bot's own __main__ window
+        try:
+            await tmux_manager.kill_window(wid)
+            killed.append(win.window_name or wid)
+            logger.info("cleanup: killed orphaned window %s (%s)", wid, win.window_name)
+        except OSError, RuntimeError:
+            logger.debug("cleanup: could not kill %s", wid)
+
+    msg = (
+        f":broom: Killed {len(killed)} orphaned window(s): "
+        + ", ".join(f"`{n}`" for n in killed)
+        if killed
+        else ":white_check_mark: No orphaned windows found."
+    )
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=msg,
     )
 
 
