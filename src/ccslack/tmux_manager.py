@@ -1164,11 +1164,12 @@ class TmuxManager:
         if not path.is_dir():
             return False, f"Not a directory: {work_dir}", "", ""
 
-        # Create window name, adding suffix if name already exists
-        final_window_name = window_name if window_name else path.name
-
-        # Check for existing window name
-        base_name = final_window_name
+        # Create window name, adding suffix if name already exists.
+        # Strip any trailing -N/-N-N suffixes first so repeated restores
+        # don't accumulate "imaginaire4-2-2-2..." names.
+        raw_name = window_name if window_name else path.name
+        base_name = re.sub(r"(-\d+)+$", "", raw_name) or raw_name
+        final_window_name = base_name
         counter = 2
         while await self.find_window_by_name(final_window_name):
             final_window_name = f"{base_name}-{counter}"
