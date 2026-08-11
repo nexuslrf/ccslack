@@ -17,7 +17,6 @@ Re-exported from transcript_reader for backward-compatible imports.
 """
 
 import asyncio
-import time
 import structlog
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -56,10 +55,6 @@ _LoopError = (OSError, RuntimeError, json.JSONDecodeError, ValueError)
 
 _BACKOFF_MIN = 2.0
 _BACKOFF_MAX = 30.0
-# How recently the current transcript must have been written to before we
-# consider the session still active and refuse to switch to a newer one.
-# Matches discover_transcript's own max-age so the two thresholds agree.
-_HOOKLESS_SWITCH_GRACE = 120.0
 # Rediscovery age cap: find sessions idle up to 24 h, but not ancient ones.
 _HOOKLESS_REDISCOVERY_MAX_AGE = 86400.0
 _MSG_PREVIEW_LENGTH = 80
@@ -333,16 +328,12 @@ class SessionMonitor:
         Providers with ``supports_hookless_discovery`` write no session_map
         entry via a hook, so their windows never get monitored on their own.
         For each bound window of such a provider, scan the provider's on-disk
-        store (``discover_transcript``) on every poll tick. Register or
-        re-register only when the discovered session_id differs from the
-        currently tracked one — this allows a resumed Codex session to be
-        picked up even when the TUI app-server suppresses hook execution.
-
-        Session switching is gated by a transcript-freshness check: if the
-        currently tracked transcript was written to recently we keep it, even
-        if a newer transcript exists. This prevents a /fork (which creates a
-        parallel session in the same cwd) from oscillating control between
-        the two sessions and sending both to the same Slack channel.
+        store (``discover_transcript``) on every poll tick. Switch to the
+        newest primary session whenever the session_id differs, subject only
+        to the already_claimed guard (prevents multiple same-cwd windows from
+        racing for the same session). Switching is intentionally immediate so
+        that /resume inside the Codex TUI is reflected in Slack within one
+        poll tick (~2 s).
         """
         # Lazy: shared-state import cycle (session_map ↔ session_monitor).
         from .session_map import session_map_sync
@@ -388,17 +379,6 @@ class SessionMonitor:
             )
             if already_claimed:
                 continue
-            # Don't switch away from an active session: if the current
-            # transcript is still being written to (mtime < grace period),
-            # keep it. This stops fork oscillation while still allowing
-            # session switches after a resume (old transcript goes stale).
-            if state and state.session_id and state.transcript_path:
-                try:
-                    mtime = Path(state.transcript_path).stat().st_mtime
-                    if time.time() - mtime < _HOOKLESS_SWITCH_GRACE:
-                        continue
-                except OSError:
-                    pass
             session_map_sync.register_hookless_session(
                 window_id,
                 event.session_id,
