@@ -367,6 +367,12 @@ class SessionMonitor:
                 continue
             if state and state.session_id == event.session_id:
                 continue  # already tracking this session — no change
+            # In rediscovery mode (session_id already set), never auto-switch.
+            # A new session created elsewhere (e.g. remote terminal) should not
+            # hijack a bound window. Switching only happens after the user does
+            # /resume, which clears session_id → rediscovery becomes False.
+            if rediscovery:
+                continue
             # Don't claim a session already tracked by another bound window.
             # Multiple windows with the same cwd would otherwise race to own
             # the newest session, causing random cross-channel message leakage.
