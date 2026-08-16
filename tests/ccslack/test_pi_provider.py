@@ -208,6 +208,35 @@ def test_discover_transcript_respects_max_age(tmp_path, monkeypatch):
     )
 
 
+def test_resolve_session_transcript_finds_by_session_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    fpath = _write_session(
+        tmp_path, session_id="01a-resume-me", cwd=str(proj), age=600.0
+    )
+    # Stale (10 min old) — discover_transcript with 120s cap would miss it,
+    # but resolve_session_transcript has no age cap.
+    assert PiProvider().resolve_session_transcript("01a-resume-me", str(proj)) == str(
+        fpath
+    )
+
+
+def test_resolve_session_transcript_none_for_unknown_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    _write_session(tmp_path, session_id="01a-real", cwd=str(proj))
+    assert PiProvider().resolve_session_transcript("nope-uuid", str(proj)) is None
+
+
+def test_resolve_session_transcript_none_for_empty_args(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    p = PiProvider()
+    assert p.resolve_session_transcript("", "/tmp") is None
+    assert p.resolve_session_transcript("id", "") is None
+
+
 def test_discover_transcript_picks_newest_match(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     proj = tmp_path / "proj"

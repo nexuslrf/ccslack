@@ -97,3 +97,31 @@ def test_discover_transcript_respects_max_age(tmp_path, monkeypatch):
         CodexProvider().discover_transcript(str(proj), "ccslack:@1", max_age=120.0)
         is None
     )
+
+
+def test_resolve_session_transcript_finds_by_session_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    fpath = _write_rollout(
+        tmp_path, "abc", session_id="019f-resume", cwd=str(proj), age=600.0
+    )
+    # Stale (10 min) — discover_transcript with 120s cap would miss it,
+    # but resolve_session_transcript has no age cap.
+    assert CodexProvider().resolve_session_transcript("019f-resume", str(proj)) == str(
+        fpath
+    )
+
+
+def test_resolve_session_transcript_none_for_unknown_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    _write_rollout(tmp_path, "abc", session_id="019f-real", cwd=str(proj))
+    assert CodexProvider().resolve_session_transcript("nope-uuid", str(proj)) is None
+
+
+def test_resolve_session_transcript_none_for_empty_args(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    p = CodexProvider()
+    assert p.resolve_session_transcript("", "/tmp") is None
