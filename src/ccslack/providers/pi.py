@@ -300,6 +300,22 @@ class PiProvider(JsonlProvider):
             )
         return None
 
+    def resolve_session_transcript(self, session_id: str, cwd: str) -> str | None:
+        """Resolve a known pi session id to its transcript file path.
+
+        Scans the cwd's session directory for a file whose name contains the
+        session id (pi embeds the uuid in the filename). No age cap — the
+        restore/resume flow calls this to pre-register a known session before
+        the agent writes its first output, so the monitor's byte offset is
+        set at the current file end and all new output is caught.
+        """
+        if not session_id or not cwd:
+            return None
+        for _mtime, path in _candidate_transcripts(cwd):
+            if session_id in path.name:
+                return str(path)
+        return None
+
     # ── Commands ─────────────────────────────────────────────────────────
 
     def discover_commands(self, base_dir: str) -> list[DiscoveredCommand]:

@@ -860,6 +860,31 @@ class CodexProvider(JsonlProvider):
                     )
         return None
 
+    def resolve_session_transcript(
+        self,
+        session_id: str,
+        cwd: str,  # noqa: ARG002
+    ) -> str | None:
+        """Resolve a known codex session id to its transcript file path.
+
+        Unlike pi (which embeds the uuid in the filename), codex stores the
+        session id only in the first-line ``session_meta`` payload, so we scan
+        the sessions tree and read each file's header until the id matches.
+        No age cap — used by the restore/resume flow to pre-register a known
+        session before the agent writes its first output, which matters when
+        hooks don't fire (``tui_app_server`` mode).
+        """
+        if not session_id:
+            return None
+        sessions_dir = Path.home() / ".codex" / "sessions"
+        if not sessions_dir.is_dir():
+            return None
+        for _mtime, fpath in _collect_codex_sessions(sessions_dir):
+            meta = _read_codex_session_meta(fpath)
+            if meta and meta.get("id") == session_id:
+                return str(fpath)
+        return None
+
     # ── Status snapshot (Codex-specific) ─────────────────────────────
 
     def build_status_snapshot(

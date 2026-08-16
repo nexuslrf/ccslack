@@ -271,6 +271,20 @@ class AgentProvider(Protocol):
         """
         ...
 
+    def resolve_session_transcript(self, session_id: str, cwd: str) -> str | None:
+        """Resolve a known session_id to its transcript file path.
+
+        Unlike ``discover_transcript`` (which scans by cwd + recency), this
+        looks up a *specific* session by id — no age cap, no recency filter.
+        Used by the restore/resume flow to pre-register a known session so the
+        monitor starts tracking it before the agent writes its first output
+        (mirrors what a SessionStart hook does for hookful providers).
+
+        Returns the transcript path, or None if the provider can't resolve
+        by session id (e.g. hookful providers that don't need this path).
+        """
+        ...
+
     def requires_pane_title_for_detection(self, pane_current_command: str) -> bool:
         """Whether provider detection requires pane title for given command."""
         ...

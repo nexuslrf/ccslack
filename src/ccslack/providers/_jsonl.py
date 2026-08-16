@@ -235,6 +235,13 @@ class JsonlProvider:
     ) -> SessionStartEvent | None:
         return None
 
+    def resolve_session_transcript(
+        self,
+        session_id: str,  # noqa: ARG002 — protocol signature
+        cwd: str,  # noqa: ARG002 — protocol signature
+    ) -> str | None:
+        return None
+
     def discover_commands(
         self,
         base_dir: str,  # noqa: ARG002 — protocol signature
