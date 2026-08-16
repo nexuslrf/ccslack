@@ -480,13 +480,17 @@ Persisted per-channel (survives restart). Same exclusions as `purge`.
 - **Where**: a bound session channel.
 - **Auth**: channel membership.
 
-### `/ccslack kill [target | --all --confirm]`
+### `/ccslack kill [target | --all --confirm] [--archive]`
 
-Tear down sessions.
+Tear down sessions. By default the Slack channel is left **unbound** (not
+archived) so it can be re-bound to a different agent/workspace with
+`/ccslack here <dir> [provider]`. Append `--archive` to also archive the
+Slack channel (the previous default behaviour).
 
 | Form | Behaviour |
 |---|---|
-| `/ccslack kill` (from a session channel) | Kills *this* channel's session |
+| `/ccslack kill` (from a session channel) | Kills *this* channel's session; channel stays unbound |
+| `/ccslack kill --archive` | Same, and also archives the Slack channel |
 | `/ccslack kill <#channel>` (from meta) | Kills the session bound to the mentioned channel |
 | `/ccslack kill C0123ABC` (from meta) | Same but by raw channel ID |
 | `/ccslack kill @14` (from meta) | Same but by tmux window ID |
@@ -500,7 +504,7 @@ Each kill does (in order):
 3. Unbind the channel from the router
 4. Drop the `WindowState`
 5. Forget polling bookkeeping
-6. `conversations.archive` the Slack channel
+6. `conversations.archive` the Slack channel — **only with `--archive`**
 
 - **Where**: session channel (no-arg form) OR meta channel (any form).
 - **Auth**: session-channel form requires channel membership; targeted +

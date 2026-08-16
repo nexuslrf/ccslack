@@ -478,7 +478,10 @@ def _help_text() -> str:
         "`full` (call+result), `calls` (call only), `hidden`.\n"
         f"• `{slash} thread [on|off|default]` — group tool chains under a "
         "thread parent (vs flat).\n"
-        f"• `{slash} kill` — kill the session for THIS channel.\n"
+        f"• `{slash} kill` — kill the session for THIS channel (channel stays "
+        "unbound; rebind with `{slash} here <dir> [provider]`).\n"
+        f"• `{slash} kill --archive` — same, and also archive the Slack "
+        "channel.\n"
         f"• `{slash} kill <#channel|@window>` — kill a specific session "
         "(meta channel only).\n"
         f"• `{slash} kill --all --confirm` — kill every session "
@@ -1862,8 +1865,19 @@ def _resolve_kill_target(raw: str, *, from_channel: str) -> tuple[str, str] | No
     return None
 
 
-async def _kill_one(client, channel_id: str, window_id: str) -> str:  # noqa: ANN001
-    """Tear down one session. Returns a human-readable line for reporting."""
+async def _kill_one(
+    client,  # noqa: ANN001
+    channel_id: str,
+    window_id: str,
+    *,
+    archive: bool = False,
+) -> str:
+    """Tear down one session. Returns a human-readable line for reporting.
+
+    By default the channel is left alone (unbound, not archived) so it can be
+    re-bound to a different agent/workspace via ``/ccslack here``. Pass
+    ``archive=True`` to also archive the Slack channel (the old behaviour).
+    """
     bolt_client = BoltSlackClient(client)
     display = thread_router.get_display_name(window_id)
 
@@ -1896,13 +1910,19 @@ async def _kill_one(client, channel_id: str, window_id: str) -> str:  # noqa: AN
 
     _purge_forget(channel_id)
 
+    if not archive:
+        return (
+            f":wastebasket: killed <#{channel_id}> ({display}, `{window_id}`) "
+            "— channel left unbound (use `/ccslack here <dir> [provider]` to rebind)"
+        )
+
     try:
         await bolt_client.conversations_archive(channel=channel_id)
     except SlackApiError as exc:
         error = exc.response.get("error") if exc.response else str(exc)
         return f":warning: <#{channel_id}> ({display}) — archive failed: `{error}`"
 
-    return f":wastebasket: killed <#{channel_id}> ({display}, `{window_id}`)"
+    return f":wastebasket: killed <#{channel_id}> ({display}, `{window_id}`) — archived"
 
 
 async def _handle_kill(
@@ -1911,10 +1931,21 @@ async def _handle_kill(
     user_id: str,
     args: list[str],
 ) -> None:
-    """Implements ``/ccslack kill [target | --all --confirm]``."""
+    """Implements ``/ccslack kill [target | --all --confirm] [--archive]``.
+
+    By default the channel is left unbound (not archived) so it can be re-bound
+    to a different agent/workspace. Append ``--archive`` to also archive the
+    Slack channel (the old behaviour).
+    """
     slash = config.slash_command
 
     from .auth import is_meta_surface
+
+    # ``--archive`` opts into archiving the Slack channel after teardown.
+    # Default (no flag) leaves the channel unbound so ``/ccslack here`` can
+    # rebind it to a different agent/workspace.
+    archive = "--archive" in args
+    args = [a for a in args if a != "--archive"]
 
     if args and args[0] == "--all":
         if not is_meta_surface(channel_id):
@@ -1949,7 +1980,7 @@ async def _handle_kill(
                 text="ccslack: no active sessions.",
             )
             return
-        results = [await _kill_one(client, ch, wid) for ch, wid in targets]
+        results = [await _kill_one(client, ch, wid, archive=archive) for ch, wid in targets]
         await _post_ephemeral(
             client.chat_postEphemeral,
             channel=channel_id,
@@ -1985,7 +2016,7 @@ async def _handle_kill(
         return
 
     target_channel, target_window = resolved
-    result = await _kill_one(client, target_channel, target_window)
+    result = await _kill_one(client, target_channel, target_window, archive=archive)
 
     # Report from the meta channel (since the target channel is now archived).
     report_channel = (
