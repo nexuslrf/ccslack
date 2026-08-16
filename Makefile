@@ -1,10 +1,13 @@
 .PHONY: fmt lint test typecheck deptry check install dev build clean
 
+# Use --extra dev so the pinned ruff (0.14.x) is used, not the global one.
+# ruff 0.15.x formatter regresses multi-exception clauses (rewrites
+# `except (A, B):` to `except A, B:` — a Python 3 SyntaxError).
 fmt:
-	uv run ruff format src/ tests/
+	uv run --extra dev ruff format src/ tests/
 
 lint:
-	uv run ruff check src/ tests/
+	uv run --extra dev ruff check src/ tests/
 
 typecheck:
 	uv run pyright src/ccslack/ tests/

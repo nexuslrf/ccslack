@@ -47,7 +47,10 @@ dev = [
     "pytest-asyncio>=0.24.0",
     "pytest-cov>=6.0",
     "pytest-timeout>=2.3",
-    "ruff>=0.8.0",
+    # ruff 0.15.x formatter regresses multi-exception clauses: it rewrites
+    # `except (A, B):` to `except A, B:` (a Python 3 SyntaxError). Pin to
+    # 0.14.x until the regression is fixed upstream.
+    "ruff>=0.8.0,<0.15",
     "hypothesis>=6.0",
 ]
 
