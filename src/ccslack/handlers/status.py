@@ -321,7 +321,7 @@ def register(app) -> None:  # noqa: ANN001
 
         try:
             await _tm.kill_window(window_id)
-        except OSError, RuntimeError:
+        except (OSError, RuntimeError):
             logger.exception("kill_window failed for %s", window_id)
 
         thread_router.unbind_channel(channel_id)

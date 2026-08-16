@@ -113,7 +113,7 @@ def clear_spawn_state(window_id: str) -> None:
                 data = json.loads(entry.read_text())
                 if data.get("requester_window") == window_id:
                     entry.unlink(missing_ok=True)
-            except json.JSONDecodeError, OSError:
+            except (json.JSONDecodeError, OSError):
                 continue
 
 
@@ -130,7 +130,7 @@ def _load_spawn_log() -> dict[str, list[float]]:
     if path.exists():
         try:
             return json.loads(path.read_text())
-        except json.JSONDecodeError, OSError:
+        except (json.JSONDecodeError, OSError):
             return {}
     return {}
 
@@ -221,7 +221,7 @@ def scan_spawn_requests(spawn_timeout: int = 300) -> list[SpawnRequest]:
         try:
             data = json.loads(entry.read_text())
             req = SpawnRequest.from_dict(data)
-        except json.JSONDecodeError, OSError, KeyError:
+        except (json.JSONDecodeError, OSError, KeyError):
             continue
 
         if req.id in _pending_requests:

@@ -724,7 +724,7 @@ def _ps_snapshot() -> dict[int, tuple[int, int, str, str]]:
             text=True,
             timeout=5,
         )
-    except subprocess.TimeoutExpired, OSError:
+    except (subprocess.TimeoutExpired, OSError):
         return {}
     snapshot: dict[int, tuple[int, int, str, str]] = {}
     for line in result.stdout.splitlines():
@@ -760,7 +760,7 @@ def _foreground_pgid_on_tty(
             text=True,
             timeout=5,
         )
-    except subprocess.TimeoutExpired, OSError:
+    except (subprocess.TimeoutExpired, OSError):
         return None
     for line in result.stdout.splitlines():
         try:
@@ -1000,7 +1000,7 @@ def _provider_from_pane_tty(pane_tty: str) -> ProviderName | None:
             text=True,
             timeout=5,
         )
-    except subprocess.TimeoutExpired, OSError:
+    except (subprocess.TimeoutExpired, OSError):
         return None
     text = result.stdout.lower()
     if "gemini" in text:

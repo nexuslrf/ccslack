@@ -46,7 +46,7 @@ async def capture_window(window_id: str) -> bytes | None:
         return None
     try:
         return await text_to_image(text, with_ansi=True)
-    except OSError, ValueError:
+    except (OSError, ValueError):
         logger.exception("text_to_image failed for %s", window_id)
         return None
 

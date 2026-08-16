@@ -37,7 +37,7 @@ class ScreenBuffer:
         """Feed raw terminal text (with ANSI escapes) into the screen."""
         try:
             self._stream.feed(raw_text)
-        except TypeError, ValueError, KeyError, IndexError, UnicodeDecodeError:
+        except (TypeError, ValueError, KeyError, IndexError, UnicodeDecodeError):
             logger.debug("pyte feed error, resetting screen", exc_info=True)
             self._screen.reset()
 

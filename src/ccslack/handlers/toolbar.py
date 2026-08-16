@@ -418,7 +418,7 @@ async def _dispatch_key(body: dict[str, Any]) -> None:
 
     try:
         await tmux_manager.send_keys(window_id, tmux_key, literal=False, enter=False)
-    except OSError, RuntimeError:
+    except (OSError, RuntimeError):
         logger.exception("toolbar send_keys(%s, %s) failed", window_id, tmux_key)
 
 

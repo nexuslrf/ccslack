@@ -1872,7 +1872,7 @@ async def _kill_one(client, channel_id: str, window_id: str) -> str:  # noqa: AN
 
     try:
         await tmux_manager.kill_window(window_id)
-    except OSError, RuntimeError:
+    except (OSError, RuntimeError):
         logger.exception("kill_window failed for %s", window_id)
 
     thread_router.unbind_channel(channel_id)
@@ -2629,7 +2629,7 @@ async def _handle_cleanup(
             await tmux_manager.kill_window(wid)
             killed.append(win.window_name or wid)
             logger.info("cleanup: killed orphaned window %s (%s)", wid, win.window_name)
-        except OSError, RuntimeError:
+        except (OSError, RuntimeError):
             logger.debug("cleanup: could not kill %s", wid)
 
     msg = (

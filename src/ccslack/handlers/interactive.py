@@ -105,7 +105,7 @@ def _result_ts(result: Any) -> str:
         return str(result.get("ts") or "")
     try:
         return str(result["ts"])
-    except KeyError, IndexError, TypeError:
+    except (KeyError, IndexError, TypeError):
         return ""
 
 

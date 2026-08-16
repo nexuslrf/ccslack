@@ -71,7 +71,7 @@ def _scan_index(
 ) -> None:
     try:
         data = json.loads(index_file.read_text(encoding="utf-8"))
-    except json.JSONDecodeError, OSError:
+    except (json.JSONDecodeError, OSError):
         return
     original_path = data.get("originalPath", "")
     for entry in data.get("entries", []):

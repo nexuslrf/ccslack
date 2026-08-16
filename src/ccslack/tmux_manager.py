@@ -669,7 +669,7 @@ class TmuxManager:
                     check=False,
                 )
             return True
-        except subprocess.TimeoutExpired, OSError:
+        except (subprocess.TimeoutExpired, OSError):
             logger.exception("Failed to send keys to foreign window %s", target)
             return False
 

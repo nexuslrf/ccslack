@@ -257,7 +257,7 @@ class SessionManager:
             return set()
         try:
             raw = json.loads(config.session_map_file.read_text())
-        except json.JSONDecodeError, OSError:
+        except (json.JSONDecodeError, OSError):
             return set()
         prefix = f"{config.tmux_session_name}:"
         result: set[str] = set()

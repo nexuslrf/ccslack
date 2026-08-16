@@ -70,7 +70,7 @@ def telegram_builtins() -> list[DiscoveredCommand]:
 def _safe_read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
-    except OSError, UnicodeDecodeError:
+    except (OSError, UnicodeDecodeError):
         return ""
 
 

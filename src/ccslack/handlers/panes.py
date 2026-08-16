@@ -33,7 +33,7 @@ async def handle_panes(
 
     try:
         panes = await tmux_manager.list_panes(window_id)
-    except OSError, RuntimeError:
+    except (OSError, RuntimeError):
         logger.exception("list_panes failed for %s", window_id)
         panes = []
 

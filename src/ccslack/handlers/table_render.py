@@ -167,7 +167,7 @@ async def render_tables_png(blocks: list[str]) -> bytes | None:
 
     try:
         return await text_to_image(monospace, with_ansi=False)
-    except OSError, ValueError:
+    except (OSError, ValueError):
         logger.exception("table_render: text_to_image failed")
         return None
 

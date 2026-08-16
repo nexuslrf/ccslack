@@ -210,7 +210,7 @@ def validate_branch_name(name: str) -> bool:
             timeout=_GIT_TIMEOUT,
             check=False,
         )
-    except OSError, subprocess.TimeoutExpired:
+    except (OSError, subprocess.TimeoutExpired):
         return False
     return res.returncode == 0
 

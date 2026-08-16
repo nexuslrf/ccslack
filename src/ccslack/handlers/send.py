@@ -89,7 +89,7 @@ def _lex(path: Path) -> Path:
 def _safe_relative(path: Path, cwd: Path) -> str:
     try:
         return str(_lex(path).relative_to(_lex(cwd)))
-    except ValueError, OSError:
+    except (ValueError, OSError):
         return str(_lex(path))
 
 
@@ -102,7 +102,7 @@ def _walk_filtered(cwd: Path, depth_limit: int) -> list[Path]:
         dir_path = Path(dirpath)
         try:
             rel_depth = len(dir_path.resolve().relative_to(cwd_resolved).parts)
-        except ValueError, OSError:
+        except (ValueError, OSError):
             dirnames[:] = []
             continue
         if rel_depth >= depth_limit:
@@ -126,7 +126,7 @@ def _find_files(cwd: Path, pattern: str) -> list[Path]:
         if exact.exists() and exact.is_file() and validate_sendable(exact, cwd) is None:
             try:
                 rel = exact.resolve().relative_to(cwd.resolve())
-            except ValueError, OSError:
+            except (ValueError, OSError):
                 rel = None
             if rel is None or not any(is_excluded_dir(part) for part in rel.parts[:-1]):
                 return [exact]

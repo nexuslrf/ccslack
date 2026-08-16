@@ -72,7 +72,7 @@ def _ensure_loaded() -> None:
         return
     try:
         raw = json.loads(config.purge_file.read_text())
-    except OSError, json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError):
         return
     led = raw.get("ledger", {})
     if isinstance(led, dict):
@@ -412,7 +412,7 @@ async def _purge_scan_history(client: SlackClient, channel_id: str) -> int:
 def _ts_age_ok(ts: str, cutoff: float) -> bool:
     try:
         return float(ts) >= cutoff
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return False
 
 
