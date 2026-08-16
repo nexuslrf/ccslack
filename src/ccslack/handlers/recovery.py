@@ -143,19 +143,29 @@ async def recover_channel_context(
 
 
 def _latest_session_id_for(provider: str, cwd: str) -> str:
-    """Best-effort: most-recent session id for ``cwd`` (Claude only today).
+    """Best-effort: most-recent session id for ``cwd``.
 
-    Used by ``resume`` re-adoption when there's no remembered session id.
-    Codex / others fall back to ``continue`` (``resume --last``), which doesn't
-    need an id, so an empty string is fine for them.
+    Used by ``resume`` re-adoption when there's no remembered session id (e.g.
+    after tmux recycled a window id and the stale id was dropped). Claude
+    scans its projects dir; hookless providers (pi, codex) use
+    ``discover_transcript`` with no age cap so a stale-but-correct session is
+    found after a tmux restart.
     """
-    if provider != "claude":
-        return ""
-    # Lazy: resume module pulls filesystem scanners.
-    from .resume import scan_sessions_for_cwd
+    if provider == "claude":
+        # Lazy: resume module pulls filesystem scanners.
+        from .resume import scan_sessions_for_cwd
 
-    entries = scan_sessions_for_cwd(cwd)
-    return entries[0].session_id if entries else ""
+        entries = scan_sessions_for_cwd(cwd)
+        return entries[0].session_id if entries else ""
+
+    # Hookless providers: discover the newest session for this cwd with no
+    # age cap (max_age=0 = unlimited). After a tmux restart the transcript
+    # may be hours stale but is still the right session to resume.
+    provider_obj = get_provider_for_window("", provider_name=provider)
+    if not provider_obj.capabilities.supports_hookless_discovery:
+        return ""
+    event = provider_obj.discover_transcript(cwd, "", max_age=0)
+    return event.session_id if event else ""
 
 
 def _build_banner_blocks(window_id: str) -> tuple[list[dict[str, Any]], str]:
@@ -319,6 +329,48 @@ async def restore_in_channel(
     )
     session_manager.set_window_provider(new_window_id, provider, cwd=cwd)
     session_manager.set_window_origin(new_window_id, "ccslack_created")
+
+    # Pre-register a known resumed session so the monitor starts tracking it
+    # immediately — mirrors what a SessionStart hook does for hookful
+    # providers. Without this, a hookless provider (pi without the
+    # hook-runner firing) would only be discovered after the agent writes its
+    # first output, and that first output would be missed: the monitor sets
+    # its byte offset to end-of-file at discovery time, skipping anything
+    # already written. Pre-registration sets the offset *before* the agent
+    # writes, so all new output is caught.
+    if mode == "resume" and session_id:
+        provider_obj = get_provider_for_window(new_window_id, provider_name=provider)
+        transcript = provider_obj.resolve_session_transcript(session_id, cwd)
+        if transcript:
+            # Lazy: session_map imports thread_router/window_state_store which
+            # are already loaded above; keep the import local to the resume
+            # path so fresh/continue never pay for it.
+            import asyncio
+
+            from ..session_map import session_map_sync
+
+            session_map_sync.register_hookless_session(
+                new_window_id, session_id, cwd, transcript, provider
+            )
+            try:
+                await asyncio.to_thread(
+                    session_map_sync.write_hookless_session_map,
+                    new_window_id,
+                    session_id,
+                    cwd,
+                    transcript,
+                    provider,
+                )
+            except OSError:
+                logger.exception(
+                    "restore: failed to write session_map for %s", new_window_id
+                )
+            logger.info(
+                "restore: pre-registered %s session %s for window %s",
+                provider,
+                session_id,
+                new_window_id,
+            )
 
     bolt_client = BoltSlackClient(client)
     # Lazy: status module pulls session_manager + slack helpers.
