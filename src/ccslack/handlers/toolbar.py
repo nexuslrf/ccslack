@@ -59,16 +59,24 @@ _PANE_SNAPSHOT_LINES = 12  # tail lines shown above the buttons
 _Layout = list[list[tuple[str, str]]]
 
 
+# Esc button emoji — a solid stop square reads as "dismiss/escape" across
+# providers. (Was :arrow_left_hook: which looks like a return/undo arrow.)
+_ESC = ":black_square_for_stop: Esc"
+
 _CLAUDE_LAYOUT: _Layout = [
     [
-        (":arrow_left_hook: Esc", "Escape"),
-        (":left_right_arrow: Mode", "BTab"),  # Shift+Tab cycles approval mode
+        (_ESC, "Escape"),
         (":bulb: Think", "Tab"),
+        (":left_right_arrow: Mode", "BTab"),  # Shift+Tab cycles approval mode
         (":octagonal_sign: ^C", "C-c"),
     ],
     [
         (":arrow_up: Up", "Up"),
         (":arrow_down: Down", "Down"),
+        (":arrow_left: Left", "Left"),
+        (":arrow_right: Right", "Right"),
+    ],
+    [
         (":leftwards_arrow_with_hook: Enter", "Enter"),
         (":back: Bksp", "BSpace"),
     ],
@@ -83,7 +91,7 @@ _CLAUDE_LAYOUT: _Layout = [
 
 _CODEX_LAYOUT: _Layout = [
     [
-        (":arrow_left_hook: Esc", "Escape"),
+        (_ESC, "Escape"),
         (":arrow_right_hook: Tab", "Tab"),
         (":left_right_arrow: Model", "BTab"),
         (":octagonal_sign: ^C", "C-c"),
@@ -91,6 +99,10 @@ _CODEX_LAYOUT: _Layout = [
     [
         (":arrow_up: Up", "Up"),
         (":arrow_down: Down", "Down"),
+        (":arrow_left: Left", "Left"),
+        (":arrow_right: Right", "Right"),
+    ],
+    [
         (":leftwards_arrow_with_hook: Enter", "Enter"),
         (":back: Bksp", "BSpace"),
     ],
@@ -118,8 +130,13 @@ _SHELL_LAYOUT: _Layout = [
     [
         (":arrow_up: Up", "Up"),
         (":arrow_down: Down", "Down"),
+        (":arrow_left: Left", "Left"),
+        (":arrow_right: Right", "Right"),
+    ],
+    [
         (":arrow_right_hook: Tab", "Tab"),
-        (":arrow_left_hook: Esc", "Escape"),
+        (_ESC, "Escape"),
+        (":back: Bksp", "BSpace"),
     ],
 ]
 
