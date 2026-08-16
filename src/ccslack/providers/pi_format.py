@@ -193,41 +193,106 @@ def _assistant_error_message(
     )
 
 
+# Pi ``stopReason`` value marking an assistant turn that will call a tool.
+# Any text emitted in such a turn is pre-tool narration, not the answer —
+# mirrors Claude's ``stop_reason == "tool_use"`` → ``phase="commentary"``.
+_PI_STOP_REASON_TOOL_USE = "toolUse"
+
+
+def _text_phase(stop_reason: str) -> str:
+    """Classify an assistant text block as commentary or the final answer.
+
+    ``toolUse`` means a tool call follows, so any text is narration. Every
+    other terminal reason (``stop`` / ``length`` / ``aborted`` / ``error``
+    or absent) marks the turn's final answer.
+    """
+    return "commentary" if stop_reason == _PI_STOP_REASON_TOOL_USE else "final_answer"
+
+
+def _thinking_block_to_message(
+    block: dict[str, Any], has_text: bool, timestamp: str | None = None
+) -> AgentMessage | None:
+    """Convert one ``thinking`` content block into a thinking AgentMessage.
+
+    A non-empty thinking text becomes an expandable quote. An empty thinking
+    block still surfaces as a ``(thinking)`` placeholder unless the turn also
+    produced visible text — matching Claude's handling so a thinking-only turn
+    is not silently dropped from the thinking thread.
+    """
+    thinking_text = block.get("thinking", "")
+    if isinstance(thinking_text, str) and thinking_text.strip():
+        return AgentMessage(
+            text=format_expandable_quote(thinking_text),
+            role="assistant",
+            content_type="thinking",
+            timestamp=timestamp,
+        )
+    if not has_text:
+        return AgentMessage(
+            text="(thinking)",
+            role="assistant",
+            content_type="thinking",
+            timestamp=timestamp,
+        )
+    return None
+
+
+def _text_block_to_message(
+    block: dict[str, Any], phase: str, timestamp: str | None = None
+) -> AgentMessage | None:
+    """Convert one ``text`` content block into a text AgentMessage."""
+    text = block.get("text")
+    if isinstance(text, str) and text.strip():
+        return AgentMessage(
+            text=text.strip(),
+            role="assistant",
+            content_type="text",
+            phase=phase,
+            timestamp=timestamp,
+        )
+    return None
+
+
 def _parse_assistant_content(
     content: Any,
     pending: Pending,
     timestamp: str | None,
+    stop_reason: str = "",
 ) -> list[AgentMessage]:
-    """Extract text and tool_use messages from assistant content."""
+    """Extract text, thinking, and tool_use messages from assistant content."""
+    phase = _text_phase(stop_reason)
     if isinstance(content, str):
-        if content.strip():
-            return [
+        text = content.strip()
+        return (
+            [
                 AgentMessage(
-                    text=content.strip(),
+                    text=text,
                     role="assistant",
                     content_type="text",
+                    phase=phase,
                     timestamp=timestamp,
                 )
             ]
-        return []
+            if text
+            else []
+        )
     if not isinstance(content, list):
         return []
     messages: list[AgentMessage] = []
+    has_text = False
     for block in content:
         if not isinstance(block, dict):
             continue
         btype = block.get("type", "")
         if btype == "text":
-            text = block.get("text")
-            if isinstance(text, str) and text.strip():
-                messages.append(
-                    AgentMessage(
-                        text=text.strip(),
-                        role="assistant",
-                        content_type="text",
-                        timestamp=timestamp,
-                    )
-                )
+            msg = _text_block_to_message(block, phase, timestamp)
+            if msg is not None:
+                messages.append(msg)
+                has_text = True
+        elif btype == "thinking":
+            msg = _thinking_block_to_message(block, has_text, timestamp)
+            if msg is not None:
+                messages.append(msg)
         elif btype == "toolCall":
             messages.append(_tool_call_block_to_message(block, pending, timestamp))
     return messages
@@ -238,12 +303,16 @@ def parse_assistant(
 ) -> tuple[list[AgentMessage], Pending]:
     """Split an assistant message into ordered text + tool_use AgentMessages.
 
+    ``stopReason`` classifies text blocks: ``toolUse`` → pre-tool commentary,
+    anything else → the turn's final answer (closes the tool-call thread).
     ``stopReason=="error"`` always appends an ``errorMessage`` notice — pi can
     emit errors alongside partial content, so gating on empty output would hide
     the failure.
     """
     content = msg.get("content", [])
-    messages = _parse_assistant_content(content, pending, timestamp)
+    stop_reason_raw = msg.get("stopReason", "")
+    stop_reason = stop_reason_raw if isinstance(stop_reason_raw, str) else ""
+    messages = _parse_assistant_content(content, pending, timestamp, stop_reason)
     err_msg = _assistant_error_message(msg, timestamp)
     if err_msg is not None:
         messages.append(err_msg)

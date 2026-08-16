@@ -127,6 +127,11 @@ class PiProvider(JsonlProvider):
             "SubagentStop",
             "Notification",
         ),
+        # The cc-thingz hook-runner is an opt-in extension; when it isn't
+        # installed (or doesn't fire SessionStart), the monitor polls
+        # discover_transcript() to find the session by cwd — same fallback
+        # Codex uses. Hooks remain the fast path when present.
+        supports_hookless_discovery=True,
         supports_resume=True,
         supports_continue=True,
         supports_structured_transcript=True,
