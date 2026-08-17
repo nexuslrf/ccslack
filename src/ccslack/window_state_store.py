@@ -201,6 +201,14 @@ class WindowState:
     # Last-known status label rendered to the pinned status message
     # (active/idle/done/dead). Persisted so polling can dedup updates.
     status_state: str = "idle"
+    # Transient session-switch signal — set when the user sends a
+    # session-switching command (/resume, /fork, /clone, /import) from Slack.
+    # Stores the session_id we're switching FROM so hookless discovery can
+    # wait for a *different* session to appear before rebinding (instead of
+    # the default anti-hijack guard that blocks all session changes). In-memory
+    # only — a bot restart during a switch just re-binds whatever's active.
+    session_switch_from: str = ""
+    session_switch_at: float = 0.0  # time.monotonic() when the switch was initiated
 
     def to_dict(self) -> dict[str, Any]:  # noqa: C901
         d: dict[str, Any] = {
@@ -377,6 +385,34 @@ class WindowStateStore:
         state.notification_mode = "all"
         self._schedule_save()
         logger.info("Cleared session for window_id %s", window_id)
+
+    def set_session_switch_pending(self, window_id: str) -> None:
+        """Flag a window as awaiting a session switch (e.g. /resume sent from Slack).
+
+        Records the current session_id as the one we're switching FROM so
+        hookless discovery can wait for a *different* session to appear.
+        No-op if the window has no tracked state yet.
+        """
+        import time
+
+        state = self.window_states.get(window_id)
+        if state is None:
+            return
+        state.session_switch_from = state.session_id
+        state.session_switch_at = time.monotonic()
+        logger.info(
+            "Session switch pending for window %s (from %s)",
+            window_id,
+            state.session_switch_from or "(none)",
+        )
+
+    def clear_session_switch_pending(self, window_id: str) -> None:
+        """Clear the session-switch flag (switch completed or timed out)."""
+        state = self.window_states.get(window_id)
+        if state is None:
+            return
+        state.session_switch_from = ""
+        state.session_switch_at = 0.0
 
     def get_session_id_for_window(self, window_id: str) -> str | None:
         """Look up session_id for a window from window_states."""

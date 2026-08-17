@@ -17,11 +17,32 @@ import structlog
 
 from ..slack_client import BoltSlackClient
 from ..tmux_manager import tmux_manager
+from ..window_state_store import window_store
 from . import shell_capture, shell_marker
 
 logger = structlog.get_logger()
 
 _SendError = (OSError, RuntimeError)
+
+# Agent-native slash commands that switch to a different session transcript.
+# When sent from Slack (forwarded to the tmux pane), we flag the window so
+# hookless discovery allows the session change instead of blocking it as a
+# suspected foreign hijack. /new is excluded (collides with /ccslack new).
+_SESSION_SWITCH_COMMANDS = frozenset({"/resume", "/fork", "/clone", "/import"})
+
+# How long the switch flag stays active before auto-clearing (user cancelled
+# the picker or the switch failed). Bounds the window's anti-hijack
+# vulnerability.
+_SESSION_SWITCH_TIMEOUT_SECS = 120.0
+
+
+def _is_session_switch_command(text: str) -> bool:
+    """True when *text* is a native agent command that switches sessions."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    first_word = stripped.split(None, 1)[0].lower()
+    return first_word in _SESSION_SWITCH_COMMANDS
 
 
 async def deliver_to_agent(
@@ -38,6 +59,13 @@ async def deliver_to_agent(
     """
     is_shell = shell_capture.is_shell_window(window_id)
     use_marker = False
+
+    # Detect a native session-switch command (/resume, /fork, …) forwarded
+    # from Slack. Flag the window so hookless discovery allows the next
+    # session change instead of blocking it as a foreign hijack.
+    if not is_shell and _is_session_switch_command(text):
+        window_store.set_session_switch_pending(window_id)
+
     if is_shell:
         # Marker path (preferred) only works when we have a Slack message to
         # anchor the exit-code reaction to; otherwise fall back to pane-diff.

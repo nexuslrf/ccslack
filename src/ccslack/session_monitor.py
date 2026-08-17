@@ -57,6 +57,10 @@ _BACKOFF_MIN = 2.0
 _BACKOFF_MAX = 30.0
 # Rediscovery age cap: find sessions idle up to 24 h, but not ancient ones.
 _HOOKLESS_REDISCOVERY_MAX_AGE = 86400.0
+# How long the session-switch flag stays active before auto-clearing
+# (user cancelled the picker or the switch failed). Bounds the window's
+# anti-hijack vulnerability.
+_SESSION_SWITCH_TIMEOUT_SECS = 120.0
 _MSG_PREVIEW_LENGTH = 80
 
 logger = structlog.get_logger()
@@ -357,6 +361,23 @@ class SessionMonitor:
             # Unlimited (0) is intentionally avoided: it lets ancient sessions
             # surface and causes multiple same-cwd windows to race.
             rediscovery = bool(state and state.session_id)
+            # Session-switch signal: when the user sends /resume (or /fork,
+            # /clone, /import) from Slack, agent_input sets a transient flag
+            # on the window state. While the flag is active, discovery runs
+            # without the anti-hijack guard so it can follow the switch to
+            # the new session. The flag clears once a different session is
+            # found, or after a timeout (user cancelled the picker).
+            switch_from = getattr(state, "session_switch_from", "") if state else ""
+            switch_at = getattr(state, "session_switch_at", 0.0) if state else 0.0
+            if switch_from:
+                import time
+
+                if time.monotonic() - switch_at > _SESSION_SWITCH_TIMEOUT_SECS:
+                    # Timed out — user likely cancelled the picker.
+                    window_store.clear_session_switch_pending(window_id)
+                    switch_from = ""
+                else:
+                    rediscovery = False  # allow the switch
             event = await asyncio.to_thread(
                 provider.discover_transcript,
                 window.cwd,
@@ -371,8 +392,16 @@ class SessionMonitor:
             # A new session created elsewhere (e.g. remote terminal) should not
             # hijack a bound window. Switching only happens after the user does
             # /resume, which clears session_id → rediscovery becomes False.
+            #
+            # Exception: when a session-switch flag is active (switch_from is
+            # set), rediscovery is already False, so this guard is skipped and
+            # the switch proceeds. But if the discovered session is the SAME
+            # as the one we're switching from, keep waiting (user is still
+            # navigating the picker).
             if rediscovery:
                 continue
+            if switch_from and event.session_id == switch_from:
+                continue  # picker still open — keep tailing the old session
             # Don't claim a session already tracked by another bound window.
             # Multiple windows with the same cwd would otherwise race to own
             # the newest session, causing random cross-channel message leakage.
@@ -385,6 +414,9 @@ class SessionMonitor:
             )
             if already_claimed:
                 continue
+            # Session switch completed — clear the flag.
+            if switch_from:
+                window_store.clear_session_switch_pending(window_id)
             session_map_sync.register_hookless_session(
                 window_id,
                 event.session_id,
