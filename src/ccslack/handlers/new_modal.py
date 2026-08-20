@@ -1,20 +1,19 @@
-"""Block Kit modal that backs ``/ccslack new`` when invoked with no args.
+"""Block Kit modals that back ``/ccslack new`` and ``/ccslack here``.
 
-The CLI-arg form ``/ccslack new <dir> [provider] [--worktree [branch]]`` still
-works directly; this module covers the discovery flow for users who prefer
-clicking. Opening:
+The CLI-arg forms (``/ccslack new <dir> [provider] [--worktree [branch]]``
+and ``/ccslack here <dir> [provider]``) still work directly; this module
+covers the discovery flow for users who prefer clicking.
 
-  1. ``/ccslack new`` (no args) in the meta channel → ``views.open`` with the
-     ``ccslack_new_modal`` view payload, passing the meta channel as
-     ``private_metadata`` so we know where to report success.
-  2. The view contains three inputs: directory (text), provider (radio),
-     options (checkboxes — currently just "create git worktree").
-  3. ``view_submission`` → extract values → call ``create_session`` which
-     mirrors ``_handle_new`` minus the CLI parsing.
+``/ccslack new`` (no args) in the meta channel → ``views.open`` with the
+``ccslack_new_modal`` view payload. ``/ccslack here`` (no args) in any
+session-eligible channel → ``ccslack_here_modal``. Both share the same
+view shape (directory, provider, options); only the callback_id and the
+submission handler differ.
 
 Public API:
   * ``build_new_session_view(default_provider)`` — Block Kit view dict.
-  * ``register(app)``  — wires the view_submission handler.
+  * ``open_here_modal`` / ``open_modal`` — open the respective modal.
+  * ``register(app)`` — wires the view_submission handlers.
 """
 
 from __future__ import annotations
@@ -240,6 +239,44 @@ def register(app: AsyncApp) -> None:
             worktree_branch=branch,
         )
 
+    @app.view("ccslack_here_modal")
+    async def on_here_submit(ack, body, view, client) -> None:  # noqa: ANN001
+        await ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel_id = view.get("private_metadata", "")
+        # ``here`` binds an existing channel — channel membership is the
+        # gate (same as the CLI ``/ccslack here`` form).
+        from .auth import is_authorized
+
+        if not is_authorized(user_id, channel_id) or not channel_id:
+            return
+
+        state_values = view.get("state", {}).get("values", {})
+        directory = (
+            state_values.get("directory_block", {}).get("directory", {}).get("value")
+            or ""
+        ).strip()
+        provider = (
+            state_values.get("provider_block", {})
+            .get("provider", {})
+            .get("selected_option", {})
+            .get("value")
+            or "claude"
+        )
+
+        if not directory:
+            with contextlib.suppress(SlackApiError):
+                await client.chat_postEphemeral(
+                    channel=channel_id,
+                    user=user_id,
+                    text="ccslack: modal submitted without a directory.",
+                )
+            return
+
+        from .meta import _handle_here
+
+        await _handle_here(client, channel_id, user_id, [directory, provider])
+
 
 def _build_new_text(
     *,
@@ -314,6 +351,31 @@ async def open_modal(client, *, trigger_id: str, meta_channel: str) -> None:  # 
     except SlackApiError as exc:
         logger.warning(
             "views_open failed: %s",
+            exc.response.get("error") if exc.response else exc,
+        )
+
+
+async def open_here_modal(client, *, trigger_id: str, channel_id: str) -> None:  # noqa: ANN001
+    """Open the bind-this-channel modal in response to a trigger_id.
+
+    Mirrors ``open_modal`` but uses the ``ccslack_here_modal`` callback_id so
+    the submission handler binds the *existing* channel instead of creating a
+    new one. The host selector is omitted — ``here`` always binds locally.
+    """
+    view = build_new_session_view(
+        default_provider=config.provider_name,
+        private_metadata=channel_id,
+        hosts=None,
+        default_host="",
+    )
+    view["callback_id"] = "ccslack_here_modal"
+    view["title"]["text"] = "Bind this channel"
+    view["submit"]["text"] = "Bind"
+    try:
+        await client.views_open(trigger_id=trigger_id, view=view)
+    except SlackApiError as exc:
+        logger.warning(
+            "views_open (here) failed: %s",
             exc.response.get("error") if exc.response else exc,
         )
 

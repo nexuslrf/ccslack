@@ -317,6 +317,26 @@ def register(app: AsyncApp) -> None:
             return
 
         if sub == "here":
+            if not args:
+                # No-arg form opens the Block Kit modal — same shape as
+                # ``/ccslack new`` but binds THIS channel instead of creating
+                # a new one.
+                trigger_id = body.get("trigger_id", "")
+                if not trigger_id:
+                    await _post_ephemeral(
+                        client.chat_postEphemeral,
+                        channel=channel_id,
+                        user=user_id,
+                        text="ccslack: missing trigger_id; can't open modal.",
+                    )
+                    return
+                # Lazy: modal module pulls Block Kit builders.
+                from .new_modal import open_here_modal
+
+                await open_here_modal(
+                    client, trigger_id=trigger_id, channel_id=channel_id
+                )
+                return
             await _handle_here(client, channel_id, user_id, args)
             return
 
@@ -491,7 +511,8 @@ def _help_text() -> str:
         f"• `{slash} chat [topic]` — start a human-only thread; replies in it "
         "are not sent to the agent.\n"
         f"• `{slash} here <dir> [provider]` — bind THIS channel to a fresh "
-        "session (for channels you created + invited the bot to).\n"
+        "session (for channels you created + invited the bot to). No args "
+        "opens a picker modal.\n"
         f"• `{slash} adduser @user` / `removeuser @user` / `users` — manage "
         "who may drive this session (public mode; `ALLOWED_USERS` only).\n"
         f"• `{slash} purge [N|all|since <dur>]` — delete ccslack's own output "
