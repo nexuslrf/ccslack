@@ -247,3 +247,26 @@ def test_discover_transcript_picks_newest_match(tmp_path, monkeypatch):
     assert event is not None
     assert event.session_id == "newer"
     assert event.transcript_path == str(newer)
+
+
+def test_discover_transcript_exclude_skips_claimed(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    _write_session(tmp_path, session_id="01a-newer", cwd=str(proj), age=1.0)
+    _write_session(tmp_path, session_id="01a-older", cwd=str(proj), age=5.0)
+    # Without exclude: returns the newest
+    event = PiProvider().discover_transcript(str(proj), "ccslack:@1")
+    assert event is not None
+    assert event.session_id == "01a-newer"
+    # With exclude skipping the newest: returns the older one
+    event2 = PiProvider().discover_transcript(
+        str(proj), "ccslack:@2", exclude=frozenset({"01a-newer"})
+    )
+    assert event2 is not None
+    assert event2.session_id == "01a-older"
+    # Exclude both: returns None
+    event3 = PiProvider().discover_transcript(
+        str(proj), "ccslack:@3", exclude=frozenset({"01a-newer", "01a-older"})
+    )
+    assert event3 is None

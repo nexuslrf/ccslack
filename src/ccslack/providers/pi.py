@@ -266,8 +266,13 @@ class PiProvider(JsonlProvider):
         window_key: str,
         *,
         max_age: float | None = None,
+        exclude: frozenset[str] | None = None,
     ) -> SessionStartEvent | None:
-        """Return the newest pi transcript whose header cwd matches."""
+        """Return the newest pi transcript whose header cwd matches.
+
+        ``exclude`` skips sessions already claimed by other windows so
+        multiple pi agents in the same cwd each bind to their own session.
+        """
         if not cwd:
             return None
 
@@ -280,6 +285,7 @@ class PiProvider(JsonlProvider):
         except OSError:
             return None
 
+        skip = exclude or frozenset()
         for mtime, path in _candidate_transcripts(cwd)[:_DISCOVERY_SCAN_LIMIT]:
             if age_limit > 0 and now - mtime > age_limit:
                 break
@@ -291,6 +297,8 @@ class PiProvider(JsonlProvider):
             except OSError:
                 continue
             if header_cwd != resolved_target:
+                continue
+            if header["id"] in skip:
                 continue
             return SessionStartEvent(
                 session_id=header["id"],

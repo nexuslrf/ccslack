@@ -258,13 +258,17 @@ class AgentProvider(Protocol):
         window_key: str,
         *,
         max_age: float | None = None,
+        exclude: frozenset[str] | None = None,
     ) -> SessionStartEvent | None:
         """Discover transcript for a hookless provider session.
 
         Scans the provider's session storage for the most recent transcript
         matching the given working directory. Returns a SessionStartEvent
         if found, None otherwise. Implementations may optionally honor
-        ``max_age`` (seconds) to ignore stale transcript files.
+        ``max_age`` (seconds) to ignore stale transcript files, and
+        ``exclude`` (a set of session_ids already claimed by other windows)
+        so the caller can find the next-best candidate when multiple
+        sessions exist for the same cwd.
 
         Only useful for providers without hook support (Codex, Gemini).
         Providers with hooks (Claude) return None.

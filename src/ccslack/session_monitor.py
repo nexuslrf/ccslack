@@ -402,11 +402,25 @@ class SessionMonitor:
                     switch_from = ""
                 else:
                     rediscovery = False  # allow the switch
+            # Collect session_ids already claimed by OTHER bound windows so
+            # discovery can skip them and find this window's own session —
+            # prevents multiple same-cwd windows from racing for the newest
+            # transcript and mixing each other's messages.
+            claimed_by_others = frozenset(
+                ws.session_id
+                for other_wid, ws in window_store.window_states.items()
+                if other_wid != window_id
+                and ws.session_id
+                and thread_router.has_window(other_wid)
+            )
             event = await asyncio.to_thread(
                 provider.discover_transcript,
                 window.cwd,
                 window_id,
-                **{"max_age": _HOOKLESS_REDISCOVERY_MAX_AGE} if rediscovery else {},
+                **{
+                    "max_age": _HOOKLESS_REDISCOVERY_MAX_AGE if rediscovery else None,
+                    "exclude": claimed_by_others,
+                },
             )
             if event is None:
                 continue

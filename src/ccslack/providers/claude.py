@@ -328,6 +328,7 @@ class ClaudeProvider:
         window_key: str,
         *,
         max_age: float | None = None,
+        exclude: frozenset[str] | None = None,
     ) -> SessionStartEvent | None:
         """Scan ~/.claude/projects/<encoded-cwd>/ for the newest transcript.
 
@@ -335,6 +336,9 @@ class ClaudeProvider:
         (/fork, /branch) creates a new session without firing a hook. This
         fallback lets the monitor rebind to the active transcript when the
         tracked one goes stale.
+
+        ``exclude`` skips sessions already claimed by other windows so
+        multiple Claude agents in the same cwd each bind to their own.
         """
         if not cwd:
             return None
@@ -346,11 +350,12 @@ class ClaudeProvider:
         if not project_dir.is_dir():
             return None
         age_limit = _STALE_TRANSCRIPT_MAX_AGE_SECS if max_age is None else max_age
+        skip = exclude or frozenset()
         for mtime, fpath in _candidate_transcripts(project_dir)[:_DISCOVERY_SCAN_LIMIT]:
             if age_limit > 0 and time.time() - mtime > age_limit:
                 break
             event = _match_transcript(fpath, resolved_cwd, window_key)
-            if event is not None:
+            if event is not None and event.session_id not in skip:
                 return event
         return None
 

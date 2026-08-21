@@ -816,6 +816,7 @@ class CodexProvider(JsonlProvider):
         window_key: str,
         *,
         max_age: float | None = None,
+        exclude: frozenset[str] | None = None,
     ) -> SessionStartEvent | None:
         """Scan ~/.codex/sessions/ for the most recent transcript matching cwd.
 
@@ -826,6 +827,8 @@ class CodexProvider(JsonlProvider):
             max_age: Maximum transcript age in seconds. ``None`` uses the
                 default ``_TRANSCRIPT_MAX_AGE_SECS`` (120s). Pass ``0`` or
                 negative to disable the age check entirely.
+            exclude: session_ids already claimed by other windows; skipped
+                so multiple agents in the same cwd each bind to their own.
         """
         sessions_dir = Path.home() / ".codex" / "sessions"
         if not sessions_dir.is_dir():
@@ -840,6 +843,7 @@ class CodexProvider(JsonlProvider):
         now = time.time()
         resolved_cwd = str(Path(cwd).resolve())
         worktrees_root = Path.home() / ".codex" / "worktrees"
+        skip = exclude or frozenset()
         for mtime, fpath in jsonl_files[:20]:
             if age_limit > 0 and now - mtime > age_limit:
                 break  # sorted newest-first; remaining are all older
@@ -851,7 +855,7 @@ class CodexProvider(JsonlProvider):
             file_cwd = meta.get("cwd", "")
             if file_cwd and _cwd_matches(file_cwd, resolved_cwd, worktrees_root):
                 session_id = meta.get("id", "")
-                if session_id:
+                if session_id and session_id not in skip:
                     return SessionStartEvent(
                         session_id=session_id,
                         cwd=file_cwd,
