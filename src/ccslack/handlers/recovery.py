@@ -340,7 +340,14 @@ async def restore_in_channel(
     # writes, so all new output is caught.
     if mode == "resume" and session_id:
         provider_obj = get_provider_for_window(new_window_id, provider_name=provider)
-        transcript = provider_obj.resolve_session_transcript(session_id, cwd)
+        # Pre-registration is only needed for hookless providers (pi without
+        # hook-runner, codex in tui_app_server mode) — Claude's SessionStart
+        # hook handles registration, so resolve_session_transcript is not
+        # implemented there and must not be called.
+        if not provider_obj.capabilities.supports_hookless_discovery:
+            transcript = None
+        else:
+            transcript = provider_obj.resolve_session_transcript(session_id, cwd)
         if transcript:
             # Lazy: session_map imports thread_router/window_state_store which
             # are already loaded above; keep the import local to the resume
