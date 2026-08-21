@@ -7,7 +7,9 @@ that translates between the provider protocol and existing module APIs.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any, cast
 
 import structlog
@@ -32,8 +34,66 @@ from ccslack.terminal_parser import (
     parse_status_block,
 )
 from ccslack.transcript_parser import TranscriptParser
+from ccslack.utils import read_cwd_from_jsonl
 
 _log = structlog.get_logger(__name__)
+
+# ── Hookless discovery fallback ──────────────────────────────────────────
+# Claude's SessionStart hook is the fast path, but in-TUI branching (/fork,
+# /branch) creates a new session without firing a hook. When the tracked
+# transcript goes stale, the monitor falls back to discover_transcript() to
+# find the newest active transcript for the same cwd.
+
+# Cap transcript age when scanning — guards against picking up an old
+# historical transcript for the same cwd.
+_STALE_TRANSCRIPT_MAX_AGE_SECS = 120.0
+# How many recent files to inspect when searching for a cwd match.
+_DISCOVERY_SCAN_LIMIT = 20
+
+
+def _encode_cwd_dirname(cwd: str) -> str:
+    """Encode a cwd into Claude's project dir name (``/`` → ``-``)."""
+    return cwd.replace("/", "-")
+
+
+def _candidate_transcripts(project_dir: Path) -> list[tuple[float, Path]]:
+    """Return ``(mtime, path)`` tuples for *.jsonl in *project_dir*, newest first."""
+    results: list[tuple[float, Path]] = []
+    try:
+        for entry in project_dir.iterdir():
+            if entry.suffix != ".jsonl" or not entry.is_file():
+                continue
+            try:
+                results.append((entry.stat().st_mtime, entry))
+            except OSError:
+                continue
+    except OSError:
+        return []
+    results.sort(reverse=True)
+    return results
+
+
+def _match_transcript(
+    fpath: Path, resolved_cwd: str, window_key: str
+) -> SessionStartEvent | None:
+    """Check one transcript file for a cwd match; return a SessionStartEvent."""
+    session_id = fpath.stem
+    if not UUID_RE.match(session_id):
+        return None
+    file_cwd = read_cwd_from_jsonl(fpath)
+    if not file_cwd:
+        return None
+    try:
+        if str(Path(file_cwd).resolve()) != resolved_cwd:
+            return None
+    except OSError:
+        return None
+    return SessionStartEvent(
+        session_id=session_id,
+        cwd=file_cwd,
+        transcript_path=str(fpath),
+        window_key=window_key,
+    )
 
 _MODE_MARKERS: tuple[str, ...] = ("\u23f5\u23f5", "\u23f8")
 _MODE_HINTS: tuple[str, ...] = (
@@ -93,6 +153,11 @@ class ClaudeProvider:
         supports_hook=True,
         supports_hook_events=True,
         hook_install_managed_by_ccslack=True,
+        # Hooks are the fast path, but in-TUI branching (/fork, /branch) creates
+        # a new session without firing a hook. Enable hookless discovery as a
+        # fallback so the monitor can rebind to the active transcript when
+        # the tracked one goes stale.
+        supports_hookless_discovery=True,
         hook_event_types=(
             "Notification",
             "Stop",
@@ -259,12 +324,52 @@ class ClaudeProvider:
 
     def discover_transcript(
         self,
-        cwd: str,  # noqa: ARG002 — protocol signature
-        window_key: str,  # noqa: ARG002 — protocol signature
+        cwd: str,
+        window_key: str,
         *,
-        max_age: float | None = None,  # noqa: ARG002 — protocol signature
+        max_age: float | None = None,
     ) -> SessionStartEvent | None:
-        return None  # Claude uses hooks, not transcript discovery
+        """Scan ~/.claude/projects/<encoded-cwd>/ for the newest transcript.
+
+        Claude's SessionStart hook is the fast path, but in-TUI branching
+        (/fork, /branch) creates a new session without firing a hook. This
+        fallback lets the monitor rebind to the active transcript when the
+        tracked one goes stale.
+        """
+        if not cwd:
+            return None
+        try:
+            resolved_cwd = str(Path(cwd).resolve())
+        except OSError:
+            return None
+        project_dir = Path.home() / ".claude" / "projects" / _encode_cwd_dirname(cwd)
+        if not project_dir.is_dir():
+            return None
+        age_limit = _STALE_TRANSCRIPT_MAX_AGE_SECS if max_age is None else max_age
+        for mtime, fpath in _candidate_transcripts(project_dir)[:_DISCOVERY_SCAN_LIMIT]:
+            if age_limit > 0 and time.time() - mtime > age_limit:
+                break
+            event = _match_transcript(fpath, resolved_cwd, window_key)
+            if event is not None:
+                return event
+        return None
+
+    def resolve_session_transcript(
+        self, session_id: str, cwd: str  # noqa: ARG002
+    ) -> str | None:
+        """Resolve a known Claude session id to its transcript file path.
+
+        Claude stores the session id as the filename stem (UUID), so this is a
+        direct lookup. No age cap — used by the restore/resume flow to
+        pre-register a known session.
+        """
+        if not session_id or not UUID_RE.match(session_id):
+            return None
+        project_dir = Path.home() / ".claude" / "projects" / _encode_cwd_dirname(cwd)
+        if not project_dir.is_dir():
+            return None
+        fpath = project_dir / f"{session_id}.jsonl"
+        return str(fpath) if fpath.is_file() else None
 
     def discover_commands(self, base_dir: str) -> list[DiscoveredCommand]:
         _ = base_dir

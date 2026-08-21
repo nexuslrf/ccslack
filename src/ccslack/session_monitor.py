@@ -17,7 +17,9 @@ Re-exported from transcript_reader for backward-compatible imports.
 """
 
 import asyncio
+import os
 import structlog
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -61,11 +63,33 @@ _HOOKLESS_REDISCOVERY_MAX_AGE = 86400.0
 # (user cancelled the picker or the switch failed). Bounds the window's
 # anti-hijack vulnerability.
 _SESSION_SWITCH_TIMEOUT_SECS = 120.0
+# A tracked transcript with no writes for this long is considered stale —
+# the agent branched/forked in-TUI without firing a hook. The monitor
+# falls back to discover_transcript() to find the active one.
+_STALE_TRANSCRIPT_SECS = 10.0
 _MSG_PREVIEW_LENGTH = 80
 
 logger = structlog.get_logger()
 
 _SessionMapError = (json.JSONDecodeError, OSError)
+
+
+def _is_transcript_stale(transcript_path: str) -> bool:
+    """True when a transcript file hasn't been written to recently.
+
+    Used by the hookless discovery loop to detect in-TUI branching: the
+    agent stopped writing to the tracked transcript (it moved to a new
+    session), so discovery should rebind to the newest active transcript.
+    Returns True for missing paths (can't confirm freshness) so the caller
+    only switches when the old file is genuinely frozen.
+    """
+    if not transcript_path:
+        return True
+    try:
+        mtime = os.path.getmtime(transcript_path)
+    except OSError:
+        return True
+    return (time.time() - mtime) > _STALE_TRANSCRIPT_SECS
 
 
 class SessionMonitor:
@@ -393,13 +417,28 @@ class SessionMonitor:
             # hijack a bound window. Switching only happens after the user does
             # /resume, which clears session_id → rediscovery becomes False.
             #
-            # Exception: when a session-switch flag is active (switch_from is
+            # Exception 1: when a session-switch flag is active (switch_from is
             # set), rediscovery is already False, so this guard is skipped and
             # the switch proceeds. But if the discovered session is the SAME
             # as the one we're switching from, keep waiting (user is still
             # navigating the picker).
+            #
+            # Exception 2: the tracked transcript is stale (no new writes for
+            # _STALE_TRANSCRIPT_SECS) — the agent branched/forked in-TUI
+            # without firing a hook. Allow the switch to the newest transcript.
             if rediscovery:
-                continue
+                tracked_path = state.transcript_path if state else ""
+                if not _is_transcript_stale(tracked_path):
+                    continue  # tracked session still active — don't hijack
+                # Tracked transcript is stale → agent moved on. Fall through
+                # to register the new session.
+                logger.info(
+                    "Stale transcript for window %s (session %s); "
+                    "switching to %s",
+                    window_id,
+                    state.session_id if state else "",
+                    event.session_id,
+                )
             if switch_from and event.session_id == switch_from:
                 continue  # picker still open — keep tailing the old session
             # Don't claim a session already tracked by another bound window.
