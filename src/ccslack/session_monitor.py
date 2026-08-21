@@ -431,14 +431,7 @@ class SessionMonitor:
                 if not _is_transcript_stale(tracked_path):
                     continue  # tracked session still active — don't hijack
                 # Tracked transcript is stale → agent moved on. Fall through
-                # to register the new session.
-                logger.info(
-                    "Stale transcript for window %s (session %s); "
-                    "switching to %s",
-                    window_id,
-                    state.session_id if state else "",
-                    event.session_id,
-                )
+                # to register the new session (unless already_claimed below).
             if switch_from and event.session_id == switch_from:
                 continue  # picker still open — keep tailing the old session
             # Don't claim a session already tracked by another bound window.
@@ -456,6 +449,16 @@ class SessionMonitor:
             # Session switch completed — clear the flag.
             if switch_from:
                 window_store.clear_session_switch_pending(window_id)
+            # Log the switch (here, after all guards pass) so the log isn't
+            # spammed by already_claimed rejections every tick.
+            if rediscovery:
+                logger.info(
+                    "Stale transcript for window %s (session %s); "
+                    "switching to %s",
+                    window_id,
+                    state.session_id if state else "",
+                    event.session_id,
+                )
             session_map_sync.register_hookless_session(
                 window_id,
                 event.session_id,
