@@ -92,6 +92,36 @@ def _is_transcript_stale(transcript_path: str) -> bool:
     return (time.time() - mtime) > _STALE_TRANSCRIPT_SECS
 
 
+def _is_transcript_fresher(
+    candidate_path: str, tracked_path: str, *, now: float | None = None
+) -> bool:
+    """True when *candidate* is actively being written AND newer than *tracked*.
+
+    Guards the stale-transcript switch: only rebind when the discovered
+    session is genuinely active (written within _STALE_TRANSCRIPT_SECS) and
+    has a newer mtime than the tracked one. This prevents cycling through
+    each other's abandoned sessions when multiple agents share a cwd.
+    """
+    if not candidate_path:
+        return False
+    t = now if now is not None else time.time()
+    try:
+        candidate_mtime = os.path.getmtime(candidate_path)
+    except OSError:
+        return False
+    # Candidate must be actively being written (not stale itself).
+    if t - candidate_mtime > _STALE_TRANSCRIPT_SECS:
+        return False
+    # Candidate must be newer than the tracked transcript.
+    if not tracked_path:
+        return True
+    try:
+        tracked_mtime = os.path.getmtime(tracked_path)
+    except OSError:
+        return True  # tracked file gone — candidate is fresher by default
+    return candidate_mtime > tracked_mtime
+
+
 class SessionMonitor:
     """Monitors Claude Code sessions for new assistant messages.
 
@@ -444,8 +474,15 @@ class SessionMonitor:
                 tracked_path = state.transcript_path if state else ""
                 if not _is_transcript_stale(tracked_path):
                     continue  # tracked session still active — don't hijack
-                # Tracked transcript is stale → agent moved on. Fall through
-                # to register the new session (unless already_claimed below).
+                # Tracked transcript is stale, but only switch if the
+                # discovered session is ACTIVELY being written (fresh mtime)
+                # AND newer than the tracked one. This prevents cycling
+                # through each other's abandoned sessions when multiple
+                # agents share a cwd — a stale-but-not-switched transcript
+                # (agent is just thinking / waiting on a prompt) should not
+                # trigger a switch.
+                if not _is_transcript_fresher(event.transcript_path, tracked_path):
+                    continue
             if switch_from and event.session_id == switch_from:
                 continue  # picker still open — keep tailing the old session
             # Don't claim a session already tracked by another bound window.

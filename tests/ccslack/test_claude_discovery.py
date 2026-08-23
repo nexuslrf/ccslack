@@ -125,3 +125,57 @@ def test_is_transcript_stale_true_for_empty_path():
     from ccslack.session_monitor import _is_transcript_stale
 
     assert _is_transcript_stale("") is True
+
+
+def test_is_transcript_fresher_rejects_stale_candidate(tmp_path):
+    from ccslack.session_monitor import _is_transcript_fresher
+
+    tracked = tmp_path / "tracked.jsonl"
+    candidate = tmp_path / "candidate.jsonl"
+    tracked.write_text("{}\n")
+    candidate.write_text("{}\n")
+    # Both stale → candidate not fresher
+    old = time.time() - 60
+    os.utime(tracked, (old, old))
+    os.utime(candidate, (old, old))
+    assert _is_transcript_fresher(str(candidate), str(tracked)) is False
+
+
+def test_is_transcript_fresher_accepts_active_newer(tmp_path):
+    from ccslack.session_monitor import _is_transcript_fresher
+
+    tracked = tmp_path / "tracked.jsonl"
+    candidate = tmp_path / "candidate.jsonl"
+    tracked.write_text("{}\n")
+    candidate.write_text("{}\n")
+    # Tracked stale (60s ago), candidate fresh (now)
+    old = time.time() - 60
+    os.utime(tracked, (old, old))
+    assert _is_transcript_fresher(str(candidate), str(tracked)) is True
+
+
+def test_is_transcript_fresher_rejects_older_candidate(tmp_path):
+    from ccslack.session_monitor import _is_transcript_fresher
+
+    tracked = tmp_path / "tracked.jsonl"
+    candidate = tmp_path / "candidate.jsonl"
+    tracked.write_text("{}\n")
+    candidate.write_text("{}\n")
+    # Both fresh, but candidate is older than tracked → not fresher
+    now = time.time()
+    os.utime(tracked, (now, now))
+    os.utime(candidate, (now - 5, now - 5))
+    assert _is_transcript_fresher(str(candidate), str(tracked)) is False
+
+
+def test_is_transcript_fresher_handles_missing_files(tmp_path):
+    from ccslack.session_monitor import _is_transcript_fresher
+
+    tracked = tmp_path / "tracked.jsonl"
+    tracked.write_text("{}\n")
+    # Candidate missing → False
+    assert _is_transcript_fresher(str(tmp_path / "nope.jsonl"), str(tracked)) is False
+    # Tracked missing, candidate fresh → True
+    candidate = tmp_path / "candidate.jsonl"
+    candidate.write_text("{}\n")
+    assert _is_transcript_fresher(str(candidate), str(tmp_path / "nope.jsonl")) is True
