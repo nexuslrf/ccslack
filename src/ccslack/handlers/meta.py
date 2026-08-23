@@ -17,6 +17,7 @@ Only allowed in the configured meta channel. Replies in other channels go via
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import re
 import shlex
@@ -424,6 +425,10 @@ def register(app: AsyncApp) -> None:
             await _handle_thread(client, channel_id, user_id, args)
             return
 
+        if sub == "attach":
+            await _handle_attach(client, channel_id, user_id)
+            return
+
         if sub == "relaunch":
             await _handle_relaunch(client, channel_id, user_id, args)
             return
@@ -471,6 +476,8 @@ def _help_text() -> str:
         f"• `{slash} fleet` — multi-host: per-host connection + session status.\n"
         f"• `{slash} history [N]` — last N transcript messages in this channel.\n"
         f"• `{slash} resume` — pick a past Claude session in this channel's cwd.\n"
+        f"• `{slash} attach` — detect the agent running in this channel's tmux "
+        "pane and bind to its session (recovery for lost bindings).\n"
         f"• `{slash} restore [continue|resume|fresh]` — respawn a dead session "
         "(after reboot / tmux restart).\n"
         f"• `{slash} revive <channel> [continue|resume|fresh]` — bring back a "
@@ -1548,6 +1555,124 @@ async def _handle_here(
                 f"(tmux `{new_window_id}`). Type a message to send it to the agent."
             ),
         )
+
+
+async def _handle_attach(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+) -> None:
+    """``/ccslack attach`` — detect the bound tmux pane's agent session and bind to it.
+
+    Reads the pane's running process + cwd, detects the provider, and calls
+    ``discover_transcript`` to find the active session. Updates the window's
+    session_id + transcript_path so the monitor starts tailing it. This is
+    the manual recovery path for a channel whose session binding was lost
+    (tmux restart, relaunch, or in-TUI branching without a hook).
+    """
+    from ..providers import detect_provider_from_command, get_provider_for_window
+    from ..session_map import session_map_sync
+
+    window_id = thread_router.get_window_for_channel(channel_id)
+    if window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: this channel isn't bound to a tmux window. "
+                f"Use `{config.slash_command} here <dir> [provider]` first."
+            ),
+        )
+        return
+
+    window = await tmux_manager.find_window_by_id(window_id)
+    if window is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: tmux window `{window_id}` is gone. "
+                f"Use `{config.slash_command} restore` to respawn it."
+            ),
+        )
+        return
+
+    cwd = window.cwd or ""
+    pane_cmd = window.pane_current_command or ""
+    provider_name = detect_provider_from_command(pane_cmd)
+    if not provider_name:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: couldn't detect an agent in `{window_id}` "
+                f"(running `{pane_cmd or 'nothing'}`). "
+                "Make sure the agent CLI is running in the pane."
+            ),
+        )
+        return
+
+    provider = get_provider_for_window(window_id, provider_name=provider_name)
+    if not provider.capabilities.supports_hookless_discovery:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: `{provider_name}` doesn't support session discovery. "
+                "Use `/ccslack resume` or `/ccslack restore` instead."
+            ),
+        )
+        return
+
+    event = await asyncio.to_thread(
+        provider.discover_transcript, cwd, window_id
+    )
+    if event is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: no active `{provider_name}` session found in `{cwd}`. "
+                "Start the agent first, then re-run `/ccslack attach`."
+            ),
+        )
+        return
+
+    session_map_sync.register_hookless_session(
+        window_id,
+        event.session_id,
+        event.cwd,
+        event.transcript_path,
+        provider_name,
+    )
+    try:
+        await asyncio.to_thread(
+            session_map_sync.write_hookless_session_map,
+            window_id,
+            event.session_id,
+            event.cwd,
+            event.transcript_path,
+            provider_name,
+        )
+    except OSError:
+        logger.exception("attach: failed to write session_map for %s", window_id)
+
+    session_manager.set_window_provider(window_id, provider_name, cwd=event.cwd)
+
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=(
+            f":link: Attached `{provider_name}` session `{event.session_id[:12]}…` "
+            f"in `{event.cwd}` (tmux `{window_id}`)."
+        ),
+    )
 
 
 async def _handle_grant(

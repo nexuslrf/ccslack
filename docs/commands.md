@@ -116,6 +116,21 @@ rebinds the channel.
 - **Limitation**: Claude only. Codex/Gemini/Pi have their own resume
   flows; tell us if you want them ported.
 
+### `/ccslack attach`
+
+Detect the agent running in this channel's bound tmux pane and bind to its
+active session. Reads the pane's running process + cwd, detects the provider,
+and calls `discover_transcript` to find the active session — then updates the
+window's session_id + transcript_path so the monitor starts tailing it.
+
+This is the manual recovery path for a channel whose session binding was
+lost (tmux restart, relaunch, or in-TUI branching without a hook). Unlike
+`/ccslack restore` (which respawns a dead window), `attach` works on a
+*live* tmux pane that's already running an agent.
+
+- **Where**: a bound session channel with a live tmux pane.
+- **Auth**: channel membership.
+
 ### `/ccslack restore [continue|resume|fresh]`
 
 Recovers a session whose tmux window died — typically after a host
