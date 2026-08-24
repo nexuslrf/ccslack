@@ -773,6 +773,13 @@ async def _handle_new(
     session_manager.set_window_provider(window_id, provider, cwd=str(spawn_dir))
     session_manager.set_window_origin(window_id, "ccslack_created")
 
+    # Stamp the window creation time so hookless discovery only considers
+    # transcripts NEWER than this — excludes pre-existing sessions from a
+    # regular terminal in the same cwd.
+    import time as _time
+
+    window_store.window_states[window_id].created_at = _time.time()
+
     # Inject the ``⌘N⌘`` prompt marker for shell sessions so the passive
     # shell-output monitor can detect command boundaries and exit codes.
     # Lazy: pulls subprocess + libtmux helpers only when we actually have
