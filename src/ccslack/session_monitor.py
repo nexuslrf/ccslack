@@ -503,9 +503,12 @@ class SessionMonitor:
             )
             if already_claimed:
                 continue
-            # Session switch completed — clear the flag.
+            # Session switch completed — clear the flag and update
+            # created_at so future discovery uses the new session's era
+            # as the min_mtime floor (not the original window creation).
             if switch_from:
                 window_store.clear_session_switch_pending(window_id)
+                state.created_at = time.time()
             # Log the switch (here, after all guards pass) so the log isn't
             # spammed by already_claimed rejections every tick.
             if rediscovery:
@@ -516,6 +519,9 @@ class SessionMonitor:
                     state.session_id if state else "",
                     event.session_id,
                 )
+                # Update created_at so future discovery uses the new
+                # session's era as the min_mtime floor.
+                state.created_at = time.time()
             session_map_sync.register_hookless_session(
                 window_id,
                 event.session_id,
