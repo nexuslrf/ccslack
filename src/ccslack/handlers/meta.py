@@ -246,6 +246,7 @@ def register(app: AsyncApp) -> None:
             "toolcalls",
             "thread",
             "relaunch",
+            "attach",
             "manual",
             "run",
             "commentary",
@@ -1577,6 +1578,11 @@ async def _handle_attach(
     the manual recovery path for a channel whose session binding was lost
     (tmux restart, relaunch, or in-TUI branching without a hook).
     """
+    from .auth import is_authorized
+
+    if not is_authorized(user_id, channel_id):
+        return
+
     from ..providers import detect_provider_from_command, get_provider_for_window
     from ..session_map import session_map_sync
 

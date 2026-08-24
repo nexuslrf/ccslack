@@ -11,6 +11,11 @@ def _bind(channel: str, window: str) -> None:
     thread_router.bind_channel(channel, window, window_name="test")
 
 
+@pytest.fixture(autouse=True)
+def _allow_auth(monkeypatch):
+    monkeypatch.setattr("ccslack.handlers.auth.is_authorized", lambda *_a, **_k: True)
+
+
 @pytest.mark.asyncio
 async def test_attach_rejects_unbound_channel(monkeypatch):
     thread_router.reset()
