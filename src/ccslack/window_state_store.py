@@ -256,6 +256,8 @@ class WindowState:
             d["status_message_ts"] = self.status_message_ts
         if self.status_state and self.status_state != "idle":
             d["status_state"] = self.status_state
+        if self.created_at:
+            d["created_at"] = self.created_at
         return d
 
     @classmethod
@@ -299,6 +301,7 @@ class WindowState:
             gemini_external_warned=data.get("gemini_external_warned", False),
             status_message_ts=data.get("status_message_ts", ""),
             status_state=data.get("status_state", "idle"),
+            created_at=data.get("created_at", 0.0),
         )
 
 
