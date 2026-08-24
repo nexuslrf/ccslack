@@ -330,6 +330,13 @@ async def restore_in_channel(
     session_manager.set_window_provider(new_window_id, provider, cwd=cwd)
     session_manager.set_window_origin(new_window_id, "ccslack_created")
 
+    # Stamp the window creation time so hookless discovery only considers
+    # transcripts NEWER than this — excludes pre-existing sessions from a
+    # regular terminal in the same cwd.
+    import time as _time
+
+    window_store.window_states[new_window_id].created_at = _time.time()
+
     # Pre-register a known resumed session so the monitor starts tracking it
     # immediately — mirrors what a SessionStart hook does for hookful
     # providers. Without this, a hookless provider (pi without the

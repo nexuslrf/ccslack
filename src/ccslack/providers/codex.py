@@ -817,6 +817,7 @@ class CodexProvider(JsonlProvider):
         *,
         max_age: float | None = None,
         exclude: frozenset[str] | None = None,
+        min_mtime: float = 0.0,
     ) -> SessionStartEvent | None:
         """Scan ~/.codex/sessions/ for the most recent transcript matching cwd.
 
@@ -845,6 +846,8 @@ class CodexProvider(JsonlProvider):
         worktrees_root = Path.home() / ".codex" / "worktrees"
         skip = exclude or frozenset()
         for mtime, fpath in jsonl_files[:20]:
+            if min_mtime > 0 and mtime < min_mtime:
+                continue
             if age_limit > 0 and now - mtime > age_limit:
                 break  # sorted newest-first; remaining are all older
             meta = _read_codex_session_meta(fpath)

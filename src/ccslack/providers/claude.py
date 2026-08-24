@@ -329,6 +329,7 @@ class ClaudeProvider:
         *,
         max_age: float | None = None,
         exclude: frozenset[str] | None = None,
+        min_mtime: float = 0.0,
     ) -> SessionStartEvent | None:
         """Scan ~/.claude/projects/<encoded-cwd>/ for the newest transcript.
 
@@ -352,6 +353,8 @@ class ClaudeProvider:
         age_limit = _STALE_TRANSCRIPT_MAX_AGE_SECS if max_age is None else max_age
         skip = exclude or frozenset()
         for mtime, fpath in _candidate_transcripts(project_dir)[:_DISCOVERY_SCAN_LIMIT]:
+            if min_mtime > 0 and mtime < min_mtime:
+                continue
             if age_limit > 0 and time.time() - mtime > age_limit:
                 break
             event = _match_transcript(fpath, resolved_cwd, window_key)

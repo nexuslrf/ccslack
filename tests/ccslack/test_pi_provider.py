@@ -270,3 +270,33 @@ def test_discover_transcript_exclude_skips_claimed(tmp_path, monkeypatch):
         str(proj), "ccslack:@3", exclude=frozenset({"01a-newer", "01a-older"})
     )
     assert event3 is None
+
+
+def test_discover_transcript_min_mtime_excludes_old(tmp_path, monkeypatch):
+    """min_mtime floor excludes pre-existing sessions from a regular terminal."""
+    import time as _time
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    # Old session (pre-existing, from a regular terminal)
+    _write_session(tmp_path, session_id="01a-old", cwd=str(proj), age=60.0)
+    # New session (created after the window)
+    _write_session(tmp_path, session_id="01a-new", cwd=str(proj), age=1.0)
+    # Without min_mtime: returns the newest (01a-new)
+    event = PiProvider().discover_transcript(str(proj), "ccslack:@1")
+    assert event is not None
+    assert event.session_id == "01a-new"
+    # With min_mtime set to 30s ago: skips the old one, still finds the new one
+    floor = _time.time() - 30
+    event2 = PiProvider().discover_transcript(
+        str(proj), "ccslack:@2", min_mtime=floor
+    )
+    assert event2 is not None
+    assert event2.session_id == "01a-new"
+    # With min_mtime set to 0 (no floor): finds the newest
+    event3 = PiProvider().discover_transcript(
+        str(proj), "ccslack:@3", min_mtime=0.0
+    )
+    assert event3 is not None
+    assert event3.session_id == "01a-new"

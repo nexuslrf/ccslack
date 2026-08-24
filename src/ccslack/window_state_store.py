@@ -209,6 +209,11 @@ class WindowState:
     # only — a bot restart during a switch just re-binds whatever's active.
     session_switch_from: str = ""
     session_switch_at: float = 0.0  # time.monotonic() when the switch was initiated
+    # Wall-clock time (time.time()) when the window was (re)created. Hookless
+    # discovery uses this to only consider transcripts NEWER than this
+    # timestamp — excludes pre-existing sessions from a regular terminal in
+    # the same cwd. 0 means "no floor" (consider all).
+    created_at: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:  # noqa: C901
         d: dict[str, Any] = {

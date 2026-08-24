@@ -267,6 +267,7 @@ class PiProvider(JsonlProvider):
         *,
         max_age: float | None = None,
         exclude: frozenset[str] | None = None,
+        min_mtime: float = 0.0,
     ) -> SessionStartEvent | None:
         """Return the newest pi transcript whose header cwd matches.
 
@@ -287,6 +288,8 @@ class PiProvider(JsonlProvider):
 
         skip = exclude or frozenset()
         for mtime, path in _candidate_transcripts(cwd)[:_DISCOVERY_SCAN_LIMIT]:
+            if min_mtime > 0 and mtime < min_mtime:
+                continue
             if age_limit > 0 and now - mtime > age_limit:
                 break
             header = read_session_header(str(path))

@@ -259,16 +259,19 @@ class AgentProvider(Protocol):
         *,
         max_age: float | None = None,
         exclude: frozenset[str] | None = None,
+        min_mtime: float = 0.0,
     ) -> SessionStartEvent | None:
         """Discover transcript for a hookless provider session.
 
         Scans the provider's session storage for the most recent transcript
         matching the given working directory. Returns a SessionStartEvent
         if found, None otherwise. Implementations may optionally honor
-        ``max_age`` (seconds) to ignore stale transcript files, and
+        ``max_age`` (seconds) to ignore stale transcript files,
         ``exclude`` (a set of session_ids already claimed by other windows)
         so the caller can find the next-best candidate when multiple
-        sessions exist for the same cwd.
+        sessions exist for the same cwd, and ``min_mtime`` (a Unix
+        timestamp floor) to only consider transcripts created after that
+        time (excludes pre-existing sessions from a regular terminal).
 
         Only useful for providers without hook support (Codex, Gemini).
         Providers with hooks (Claude) return None.

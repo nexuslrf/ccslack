@@ -443,6 +443,11 @@ class SessionMonitor:
                 and ws.session_id
                 and thread_router.has_window(other_wid)
             )
+            # Floor: only consider transcripts newer than the window's
+            # creation time — excludes pre-existing sessions from a regular
+            # terminal in the same cwd. Only applies when the window has
+            # no session yet (initial binding).
+            created_at = getattr(state, "created_at", 0.0) if state else 0.0
             event = await asyncio.to_thread(
                 provider.discover_transcript,
                 window.cwd,
@@ -450,6 +455,7 @@ class SessionMonitor:
                 **{
                     "max_age": _HOOKLESS_REDISCOVERY_MAX_AGE if rediscovery else None,
                     "exclude": claimed_by_others,
+                    "min_mtime": created_at if not rediscovery else 0.0,
                 },
             )
             if event is None:
