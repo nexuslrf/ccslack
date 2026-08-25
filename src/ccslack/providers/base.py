@@ -292,6 +292,22 @@ class AgentProvider(Protocol):
         """
         ...
 
+    def discover_session_for_pane(
+        self, cwd: str, tty: str
+    ) -> SessionStartEvent | None:
+        """Attribute a session to the agent process running on *tty*.
+
+        Uses the process tree (pane_pid → agent process → its session) to
+        definitively identify which session belongs to this tmux pane —
+        unlike ``discover_transcript`` which scans by cwd + recency and can't
+        distinguish ccslack-managed sessions from regular-terminal ones in
+        the same cwd.
+
+        Returns a SessionStartEvent, or None if the provider can't attribute
+        by process tree (falls back to ``discover_transcript``).
+        """
+        ...
+
     def requires_pane_title_for_detection(self, pane_current_command: str) -> bool:
         """Whether provider detection requires pane title for given command."""
         ...

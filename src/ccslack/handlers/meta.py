@@ -1641,9 +1641,18 @@ async def _handle_attach(
         )
         return
 
-    event = await asyncio.to_thread(
-        provider.discover_transcript, cwd, window_id
-    )
+    # Primary: process-tree attribution (pane → agent → session).
+    # Falls back to cwd-based discovery if the provider doesn't implement it.
+    event = None
+    pane_tty = getattr(window, "pane_tty", "") or ""
+    if pane_tty and hasattr(provider, "discover_session_for_pane"):
+        event = await asyncio.to_thread(
+            provider.discover_session_for_pane, cwd, pane_tty
+        )
+    if event is None:
+        event = await asyncio.to_thread(
+            provider.discover_transcript, cwd, window_id
+        )
     if event is None:
         await _post_ephemeral(
             client.chat_postEphemeral,

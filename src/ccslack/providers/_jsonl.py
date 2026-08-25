@@ -244,6 +244,13 @@ class JsonlProvider:
     ) -> str | None:
         return None
 
+    def discover_session_for_pane(
+        self,
+        cwd: str,  # noqa: ARG002 — protocol signature
+        tty: str,  # noqa: ARG002 — protocol signature
+    ) -> SessionStartEvent | None:
+        return None
+
     def discover_commands(
         self,
         base_dir: str,  # noqa: ARG002 — protocol signature

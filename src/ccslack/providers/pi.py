@@ -53,6 +53,7 @@ def _pi_sessions_dir() -> Path:
 # Cap transcript age when the pane is dead — guards against picking up an
 # unrelated historical transcript for the same cwd.
 _STALE_TRANSCRIPT_MAX_AGE_SECS = 120.0
+_MIN_TIME_PARTS = 3
 
 # How many recent session files to inspect when searching for a cwd match.
 _DISCOVERY_SCAN_LIMIT = 20
@@ -70,6 +71,54 @@ def encode_cwd_dirname(cwd: str) -> str:
     stripped = stripped.rstrip("/\\")
     encoded = stripped.replace("/", "-").replace("\\", "-").replace(":", "-")
     return f"--{encoded}--"
+
+
+def _parse_filename_timestamp(ts_str: str) -> float:
+    """Parse a pi session filename timestamp into a Unix epoch float.
+
+    Pi filenames use ``2026-08-23T04-48-02-669Z`` format (ISO date +
+    dash-separated time with millis). Returns 0.0 on parse failure.
+    """
+    if not ts_str or not ts_str.endswith("Z"):
+        return 0.0
+    try:
+        date_part, time_part = ts_str[:-1].split("T", 1)
+        parts = time_part.split("-")
+        if len(parts) < _MIN_TIME_PARTS:
+            return 0.0
+        if len(parts) > _MIN_TIME_PARTS:
+            iso_time = ":".join(parts[:3]) + "." + parts[3]
+        else:
+            iso_time = ":".join(parts)
+        iso = f"{date_part}T{iso_time}"
+        from datetime import datetime
+
+        return datetime.fromisoformat(iso).timestamp()
+    except (ValueError, OSError):
+        return 0.0
+
+
+def _closest_transcript_to(
+    cwd: str, proc_start: float, *, max_delta: float = 60.0
+) -> Path | None:
+    """Find the transcript created closest to (and within *max_delta* of) *proc_start*."""
+    best_path: Path | None = None
+    best_delta = float("inf")
+    for _mtime, path in _candidate_transcripts(cwd):
+        name = path.name
+        ts_str = name.split("_", 1)[0] if "_" in name else ""
+        file_created = _parse_filename_timestamp(ts_str)
+        if file_created <= 0:
+            continue
+        if file_created < proc_start - 5.0:
+            continue
+        delta = abs(file_created - proc_start)
+        if delta < best_delta:
+            best_delta = delta
+            best_path = path
+    if best_path is None or best_delta > max_delta:
+        return None
+    return best_path
 
 
 def _candidate_transcripts(cwd: str) -> list[tuple[float, Path]]:
@@ -326,6 +375,41 @@ class PiProvider(JsonlProvider):
             if session_id in path.name:
                 return str(path)
         return None
+
+    def discover_session_for_pane(
+        self, cwd: str, tty: str
+    ) -> SessionStartEvent | None:
+        """Attribute a session to the pi process running on *tty*.
+
+        Pi doesn't expose its session id via cmdline or environ, so we match
+        the agent process's start time to transcript creation time — the
+        session created closest to (and within 60s of) the process start
+        is the right one.
+        """
+        from .process_detection import get_foreground_pid, get_process_start_time
+
+        if not cwd or not tty:
+            return None
+        pid = get_foreground_pid(tty)
+        if pid <= 0:
+            return None
+        proc_start = get_process_start_time(pid)
+        if proc_start <= 0:
+            return None
+
+        best_path = _closest_transcript_to(cwd, proc_start)
+        if best_path is None:
+            return None
+
+        header = read_session_header(str(best_path))
+        if not header:
+            return None
+        return SessionStartEvent(
+            session_id=header["id"],
+            cwd=header["cwd"],
+            transcript_path=str(best_path),
+            window_key="",
+        )
 
     # ── Commands ─────────────────────────────────────────────────────────
 

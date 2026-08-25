@@ -23,11 +23,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 
 import structlog
 
 from ..topic_state_registry import topic_state
 from .shell import KNOWN_SHELLS as _KNOWN_SHELLS
+
+_MIN_PS_PARTS = 3
 
 logger = structlog.get_logger()
 
@@ -205,6 +208,68 @@ async def detect_provider_cached(window_id: str, tty_path: str) -> str:
 
 
 @topic_state.register("window")
+def get_foreground_pid(tty_path: str) -> int:
+    """Return the PID of the foreground process on *tty_path*, or 0.
+
+    Synchronous ``ps`` call — used by session-attribution helpers that need
+    the agent process's PID (to read /proc/<pid>/cmdline or start time).
+    """
+    if not tty_path:
+        return 0
+    try:
+        result = subprocess.run(
+            ["ps", "-t", tty_path, "-o", "pid=,stat=,args="],
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return 0
+    if result.returncode != 0:
+        return 0
+    for line in result.stdout.strip().splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < _MIN_PS_PARTS:
+            continue
+        pid_s, stat, _args = parts
+        if "+" not in stat:
+            continue
+        try:
+            return int(pid_s)
+        except ValueError:
+            continue
+    return 0
+
+
+def get_process_start_time(pid: int) -> float:
+    """Return the start time of *pid* as a Unix timestamp, or 0.0.
+
+    Uses ``/proc/<pid>`` mtime as a portable approximation of the process
+    start time. Returns 0.0 if the process is gone.
+    """
+    if pid <= 0:
+        return 0.0
+    try:
+        return os.path.getmtime(f"/proc/{pid}")
+    except OSError:
+        return 0.0
+
+
+def get_process_cmdline(pid: int) -> str:
+    """Return the full cmdline of *pid*, or "".
+
+    Reads ``/proc/<pid>/cmdline`` (Linux only). Returns "" if the process
+    is gone or the file is unreadable.
+    """
+    if pid <= 0:
+        return ""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return f.read().decode("utf-8", errors="replace").replace("\0", " ").strip()
+    except OSError:
+        return ""
+
+
 def clear_detection_cache(window_id: str | None = None) -> None:
     """Clear cached detection for a window, or all windows if None."""
     if window_id is None:

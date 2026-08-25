@@ -448,16 +448,32 @@ class SessionMonitor:
             # terminal in the same cwd. Only applies when the window has
             # no session yet (initial binding).
             created_at = getattr(state, "created_at", 0.0) if state else 0.0
-            event = await asyncio.to_thread(
-                provider.discover_transcript,
-                window.cwd,
-                window_id,
-                **{
-                    "max_age": _HOOKLESS_REDISCOVERY_MAX_AGE if rediscovery else None,
-                    "exclude": claimed_by_others,
-                    "min_mtime": created_at if not rediscovery else 0.0,
-                },
-            )
+
+            # Primary attribution: use the process tree (pane → agent →
+            # session) for exact matching. This definitively distinguishes
+            # the ccslack-managed session from regular-terminal sessions
+            # in the same cwd. Falls back to discover_transcript if the
+            # provider doesn't implement it or it returns None.
+            event = None
+            if hasattr(provider, "discover_session_for_pane"):
+                pane_tty = getattr(window, "pane_tty", "") or ""
+                if pane_tty:
+                    event = await asyncio.to_thread(
+                        provider.discover_session_for_pane,
+                        window.cwd,
+                        pane_tty,
+                    )
+            if event is None:
+                event = await asyncio.to_thread(
+                    provider.discover_transcript,
+                    window.cwd,
+                    window_id,
+                    **{
+                        "max_age": _HOOKLESS_REDISCOVERY_MAX_AGE if rediscovery else None,
+                        "exclude": claimed_by_others,
+                        "min_mtime": created_at if not rediscovery else 0.0,
+                    },
+                )
             if event is None:
                 continue
             if state and state.session_id == event.session_id:

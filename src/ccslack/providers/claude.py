@@ -56,6 +56,43 @@ def _encode_cwd_dirname(cwd: str) -> str:
     return cwd.replace("/", "-")
 
 
+def _extract_uuid_flag(cmdline: str, flag: str) -> str:
+    """Extract a UUID value following *flag* from a cmdline string."""
+    import shlex
+
+    try:
+        tokens = shlex.split(cmdline)
+    except ValueError:
+        return ""
+    for i, tok in enumerate(tokens):
+        if tok == flag and i + 1 < len(tokens):
+            value = tokens[i + 1]
+            if UUID_RE.match(value):
+                return value
+        # Also handle --flag=UUID
+        if tok.startswith(f"{flag}="):
+            value = tok[len(flag) + 1 :]
+            if UUID_RE.match(value):
+                return value
+    return ""
+
+
+def _extract_path_flag(cmdline: str, flag: str) -> str:
+    """Extract a file path value following *flag* from a cmdline string."""
+    import shlex
+
+    try:
+        tokens = shlex.split(cmdline)
+    except ValueError:
+        return ""
+    for i, tok in enumerate(tokens):
+        if tok == flag and i + 1 < len(tokens):
+            return tokens[i + 1]
+        if tok.startswith(f"{flag}="):
+            return tok[len(flag) + 1 :]
+    return ""
+
+
 def _candidate_transcripts(project_dir: Path) -> list[tuple[float, Path]]:
     """Return ``(mtime, path)`` tuples for *.jsonl in *project_dir*, newest first."""
     results: list[tuple[float, Path]] = []
@@ -378,6 +415,43 @@ class ClaudeProvider:
             return None
         fpath = project_dir / f"{session_id}.jsonl"
         return str(fpath) if fpath.is_file() else None
+
+    def discover_session_for_pane(
+        self, cwd: str, tty: str
+    ) -> SessionStartEvent | None:
+        """Attribute a session to the Claude process running on *tty*.
+
+        Claude exposes its session id via ``--session-id <uuid>`` or
+        ``--resume <path>`` on the command line. Parse it directly for
+        exact attribution — no cwd/mtime guessing.
+        """
+        from .process_detection import get_foreground_pid, get_process_cmdline
+
+        pid = get_foreground_pid(tty)
+        if pid <= 0:
+            return None
+        cmdline = get_process_cmdline(pid)
+        if not cmdline:
+            return None
+
+        # Try --session-id <uuid>
+        session_id = _extract_uuid_flag(cmdline, "--session-id")
+        if session_id:
+            path = self.resolve_session_transcript(session_id, cwd)
+            if path:
+                return SessionStartEvent(
+                    session_id=session_id, cwd=cwd, transcript_path=path,
+                    window_key="",
+                )
+
+        # Try --resume <path>
+        path = _extract_path_flag(cmdline, "--resume")
+        if path and Path(path).is_file():
+            return SessionStartEvent(
+                session_id=Path(path).stem, cwd=cwd, transcript_path=path,
+                window_key="",
+            )
+        return None
 
     def discover_commands(self, base_dir: str) -> list[DiscoveredCommand]:
         _ = base_dir

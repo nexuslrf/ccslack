@@ -596,6 +596,35 @@ def _collect_codex_sessions(sessions_dir: Path) -> list[tuple[float, Path]]:
     return result
 
 
+def _closest_codex_transcript_to(
+    cwd: str, proc_start: float, *, max_delta: float = 60.0
+) -> Path | None:
+    """Find the codex transcript created closest to (and within *max_delta* of) *proc_start*."""
+    sessions_dir = Path.home() / ".codex" / "sessions"
+    if not sessions_dir.is_dir():
+        return None
+    resolved_cwd = str(Path(cwd).resolve())
+    worktrees_root = Path.home() / ".codex" / "worktrees"
+    best_path: Path | None = None
+    best_delta = float("inf")
+    for mtime, fpath in _collect_codex_sessions(sessions_dir)[:20]:
+        if mtime < proc_start - 5.0:
+            continue
+        meta = _read_codex_session_meta(fpath)
+        if not meta or not _is_primary_codex_session(meta):
+            continue
+        file_cwd = meta.get("cwd", "")
+        if file_cwd and not _cwd_matches(file_cwd, resolved_cwd, worktrees_root):
+            continue
+        delta = abs(mtime - proc_start)
+        if delta < best_delta:
+            best_delta = delta
+            best_path = fpath
+    if best_path is None or best_delta > max_delta:
+        return None
+    return best_path
+
+
 def _read_codex_session_meta(fpath: Path) -> dict[str, Any] | None:
     """Read the session_meta payload from the first line of a Codex JSONL file."""
     try:
@@ -891,6 +920,40 @@ class CodexProvider(JsonlProvider):
             if meta and meta.get("id") == session_id:
                 return str(fpath)
         return None
+
+    def discover_session_for_pane(
+        self, cwd: str, tty: str
+    ) -> SessionStartEvent | None:
+        """Attribute a session to the codex process running on *tty*.
+
+        Codex doesn't expose its session id via cmdline, so we match the
+        agent process's start time to the transcript file's mtime — the
+        session created closest to (and within 60s of) the process start
+        is the right one.
+        """
+        from .process_detection import get_foreground_pid, get_process_start_time
+
+        if not cwd or not tty:
+            return None
+        pid = get_foreground_pid(tty)
+        if pid <= 0:
+            return None
+        proc_start = get_process_start_time(pid)
+        if proc_start <= 0:
+            return None
+
+        best_path = _closest_codex_transcript_to(cwd, proc_start)
+        if best_path is None:
+            return None
+        meta = _read_codex_session_meta(best_path)
+        if not meta:
+            return None
+        return SessionStartEvent(
+            session_id=meta.get("id", ""),
+            cwd=meta.get("cwd", cwd),
+            transcript_path=str(best_path),
+            window_key="",
+        )
 
     # ── Status snapshot (Codex-specific) ─────────────────────────────
 
