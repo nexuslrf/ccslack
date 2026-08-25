@@ -48,6 +48,7 @@ def test_bound_channel_member_passes_without_global_allow(bound_router, monkeypa
     from ccslack.config import config as _cfg
 
     monkeypatch.setattr(_cfg, "allowed_users", {"U0ALLOWED"})
+    monkeypatch.setattr(_cfg, "public_channels", False)
     assert is_authorized("U0OUTSIDER", "C0BOUND") is True
 
 

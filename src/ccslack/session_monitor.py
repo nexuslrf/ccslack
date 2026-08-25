@@ -336,6 +336,40 @@ class SessionMonitor:
                 self._idle_tracker.clear_session(session_id)
             self.state.save_if_dirty()
 
+    async def _backfill_created_at(self, all_windows: list[Any]) -> None:
+        """Stamp created_at for existing windows that lack it (pre-fix windows).
+
+        Derives the creation time from the tmux pane's foreground process
+        start time — the agent process started when the window was created,
+        so /proc/<pid> mtime is a good proxy. Windows with created_at already
+        set are left alone.
+        """
+        from .window_state_store import window_store
+
+        backfilled = 0
+        for window in all_windows:
+            wid = window.window_id
+            state = window_store.window_states.get(wid)
+            if state is None or state.created_at > 0:
+                continue
+            pane_tty = getattr(window, "pane_tty", "") or ""
+            if not pane_tty:
+                continue
+            # Lazy: process_detection runs ps — only needed at startup.
+            from .providers.process_detection import get_foreground_pid, get_process_start_time
+
+            pid = get_foreground_pid(pane_tty)
+            if pid <= 0:
+                continue
+            proc_start = get_process_start_time(pid)
+            if proc_start <= 0:
+                continue
+            state.created_at = proc_start
+            backfilled += 1
+        if backfilled:
+            logger.info("Backfilled created_at for %d window(s)", backfilled)
+            window_store._schedule_save()
+
     async def _detect_and_cleanup_changes(self) -> dict[str, dict[str, str]]:
         """Reconcile session_map; clean up replaced/removed sessions; fire new-window events."""
         current_map = await self._load_current_session_map()
@@ -593,6 +627,7 @@ class SessionMonitor:
                 live_window_ids = {w.window_id for w in all_windows}
                 session_map_sync.prune_session_map(live_window_ids)
                 known_window_ids = set(current_map.keys())
+                await self._backfill_created_at(all_windows)
                 await self._discover_hookless_sessions(all_windows)
                 for window in all_windows:
                     if window.window_id in known_window_ids:

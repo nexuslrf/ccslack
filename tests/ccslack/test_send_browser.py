@@ -119,7 +119,8 @@ async def test_send_no_arg_opens_browser(tree: Path):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_browse_replaces_original(tree: Path):
+async def test_dispatch_browse_replaces_original(tree: Path, monkeypatch):
+    monkeypatch.setattr("ccslack.handlers.auth.is_authorized", lambda *_a, **_k: True)
     session_manager.set_window_provider("@2", "claude", cwd=str(tree))
     thread_router.bind_channel("C2", "@2", window_name="proj")
 
