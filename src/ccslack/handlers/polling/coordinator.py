@@ -27,6 +27,19 @@ logger = structlog.get_logger()
 # How long the agent needs to be quiet before we flip active→idle.
 IDLE_DECAY_SECONDS = 5.0
 
+# Auto-toolbar: if the agent hasn't produced output for this long after a
+# prompt, auto-open the toolbar (likely waiting for human input/approval).
+_HANGING_THRESHOLD_SECS = 120.0  # 2 minutes
+
+# Extended hang: post @channel once after this long.
+_EXTENDED_HANG_SECS = 600.0  # 10 minutes
+
+# Track per-window auto-toolbar state: (prompt_sent_at, toolbar_opened, hang_notified)
+# prompt_sent_at = monotonic time of the last user message forwarded to the agent
+# toolbar_opened = whether the auto-toolbar is currently open
+# hang_notified = whether the @channel notification was already sent
+_auto_toolbar: dict[str, tuple[float, bool, bool]] = {}
+
 _poll_task: asyncio.Task[None] | None = None
 
 # Track last-seen activity per window_id (monotonic seconds). Updated when
@@ -37,11 +50,29 @@ _last_activity: dict[str, float] = {}
 def mark_active(window_id: str) -> None:
     """Bookkeeping: called by message_routing when fresh content arrives."""
     _last_activity[window_id] = time.monotonic()
+    # Fresh output = the agent is working. Reset the auto-toolbar hang state
+    # but keep the toolbar open if it's already open (the user may be
+    # driving a picker). The toolbar closes on final_answer via end_turn.
+    entry = _auto_toolbar.get(window_id)
+    if entry is not None:
+        _prompt_sent, _opened, _notified = entry
+        _auto_toolbar[window_id] = (_prompt_sent, _opened, False)
+
+
+def mark_prompt_sent(window_id: str) -> None:
+    """Record that a user prompt was forwarded to the agent.
+
+    Called by agent_input.deliver_to_agent. Starts the auto-toolbar clock —
+    if the agent produces no output for _HANGING_THRESHOLD_SECS, the toolbar
+    is auto-opened.
+    """
+    _auto_toolbar[window_id] = (time.monotonic(), False, False)
 
 
 def forget_window(window_id: str) -> None:
     """Drop bookkeeping for a window (called on archive / unbind)."""
     _last_activity.pop(window_id, None)
+    _auto_toolbar.pop(window_id, None)
     # Lazy: prompt_probe state is best-effort; absent module is fine.
     try:
         from .prompt_probe import clear_window as _clear_probe
@@ -187,6 +218,11 @@ async def _tick(client: SlackClient, update_status) -> None:  # noqa: ANN001
             if last is not None and (now - last) > IDLE_DECAY_SECONDS:
                 await update_status(client, channel_id, window_id, "idle")
 
+        # Auto-toolbar: if the agent has been quiet for >2 min after a prompt,
+        # auto-open the toolbar (likely waiting for human input/approval).
+        # At >10 min, @channel once. Closes on final_answer via end_turn.
+        await _check_auto_toolbar(client, channel_id, window_id, now)
+
         # Probe for interactive prompts every tick — the prompt_probe module
         # gates internally on hash + interactive-mode + hook-driven providers,
         # so calling it unconditionally won't spam. We can't wait for
@@ -208,6 +244,75 @@ async def _tick(client: SlackClient, update_status) -> None:  # noqa: ANN001
             await check_passive_shell_output(
                 client, channel_id=channel_id, window_id=window_id
             )
+
+
+async def _check_auto_toolbar(
+    client: SlackClient,
+    channel_id: str,
+    window_id: str,
+    now: float,
+) -> None:
+    """Auto-open toolbar on hang, @channel on extended hang.
+
+    If the agent hasn't produced output for >2 min after a prompt, auto-open
+    the toolbar so the user can drive a picker / approve. At >10 min, post
+    @channel once. The toolbar auto-closes when a final answer arrives
+    (end_turn is called from message_routing on phase=final_answer).
+    """
+    entry = _auto_toolbar.get(window_id)
+    if entry is None:
+        return
+    prompt_sent_at, toolbar_opened, hang_notified = entry
+    elapsed = now - prompt_sent_at
+
+    # Reset if the agent has produced recent output (it's working, not hanging).
+    last_activity = _last_activity.get(window_id)
+    if last_activity is not None and (now - last_activity) < IDLE_DECAY_SECONDS:
+        # Agent is active — reset the hang timer but keep toolbar state.
+        _auto_toolbar[window_id] = (now, toolbar_opened, False)
+        return
+
+    if elapsed < _HANGING_THRESHOLD_SECS:
+        return  # not hanging yet
+
+    # Auto-open the toolbar (once).
+    if not toolbar_opened:
+        # Lazy: toolbar pulls slack_sender; keep off the hot import path.
+        from ..toolbar import open_toolbar
+
+        try:
+            await open_toolbar(client, channel_id, window_id)
+        except Exception:  # noqa: BLE001 — best-effort, never crash the poll loop
+            logger.exception("auto-toolbar open failed for %s", window_id)
+        toolbar_opened = True
+        _auto_toolbar[window_id] = (prompt_sent_at, toolbar_opened, hang_notified)
+        logger.info(
+            "Auto-opened toolbar for window %s (idle %.0fs after prompt)",
+            window_id,
+            elapsed,
+        )
+
+    # Extended hang: @channel once.
+    if elapsed >= _EXTENDED_HANG_SECS and not hang_notified:
+        from ...slack_client import BoltSlackClient
+
+        bolt = BoltSlackClient(client)
+        with contextlib.suppress(Exception):
+            await bolt.chat_postMessage(
+                channel=channel_id,
+                text=(
+                    f":bell: <@channel> Agent has been waiting for input "
+                    f"for {int(elapsed / 60)} min in <#{channel_id}>. "
+                    "Use the toolbar to approve or respond."
+                ),
+            )
+        hang_notified = True
+        _auto_toolbar[window_id] = (prompt_sent_at, toolbar_opened, hang_notified)
+        logger.info(
+            "Sent @channel hang notification for window %s (%.0fs)",
+            window_id,
+            elapsed,
+        )
 
 
 async def _handle_dead(
@@ -243,6 +348,7 @@ __all__ = [
     "forget_window",
     "is_channel_gone",
     "mark_active",
+    "mark_prompt_sent",
     "prune_channel",
     "start_status_polling",
     "stop_status_polling",

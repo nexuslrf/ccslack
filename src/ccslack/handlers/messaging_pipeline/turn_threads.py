@@ -21,6 +21,7 @@ turns (any orphaned parent just keeps its "running…" text, harmless).
 
 from __future__ import annotations
 
+import contextlib
 import structlog
 import time
 from dataclasses import dataclass, field
@@ -32,6 +33,45 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 _RUNNING_TEXT = ":hammer_and_wrench: *Tool activity* — running… _(expand thread)_"
+
+
+def _close_auto_toolbar(window_id: str) -> None:
+    """Clear the auto-toolbar hang state and close the toolbar if open.
+
+    Called from end_turn when a final answer arrives — the agent is no
+    longer hanging, so the auto-opened toolbar should close.
+    """
+    from ..polling.coordinator import _auto_toolbar
+
+    entry = _auto_toolbar.pop(window_id, None)
+    if entry is None:
+        return
+    _prompt_sent, _opened, _notified = entry
+    if not _opened:
+        return
+    # Lazy: toolbar._stop_refresh + safe_close_message close the live toolbar.
+    from ..toolbar import _stop_refresh
+    from ...slack_sender import safe_close_message
+    from ...thread_router import thread_router
+
+    channel_id = thread_router.get_channel_for_window(window_id) or ""
+    if not channel_id:
+        return
+    # Find the toolbar message ts — it's the active toolbar for this channel.
+    from ..toolbar import _active_toolbars
+
+    for ts, session in list(_active_toolbars.items()):
+        if session.window_id == window_id:
+            _stop_refresh(ts)
+            with contextlib.suppress(Exception):
+                safe_close_message(
+                    None,  # client not available here; best-effort
+                    channel=channel_id,
+                    ts=ts,
+                    label="auto-toolbar",
+                )
+            _active_toolbars.pop(ts, None)
+            break
 
 
 def _parent_blocks(text: str) -> list[dict]:
@@ -135,6 +175,13 @@ async def end_turn(client: SlackClient, channel_id: str) -> None:
     turn = _turns.pop(channel_id, None)
     if turn is None:
         return
+
+    # Close the auto-toolbar if one was auto-opened by the hang detector.
+    from ...thread_router import thread_router
+
+    wid = thread_router.get_window_for_channel(channel_id)
+    if wid:
+        _close_auto_toolbar(wid)
     # Lazy: slack_sender pulls config; import at call site.
     from ...slack_sender import safe_update
 

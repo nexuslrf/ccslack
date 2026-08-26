@@ -66,6 +66,14 @@ async def deliver_to_agent(
     if not is_shell and _is_session_switch_command(text):
         window_store.set_session_switch_pending(window_id)
 
+    # Record that a prompt was sent so the auto-toolbar hang detector starts
+    # its clock — if the agent produces no output for >2 min, the toolbar
+    # auto-opens.
+    if not is_shell:
+        from .polling.coordinator import mark_prompt_sent
+
+        mark_prompt_sent(window_id)
+
     if is_shell:
         # Marker path (preferred) only works when we have a Slack message to
         # anchor the exit-code reaction to; otherwise fall back to pane-diff.
