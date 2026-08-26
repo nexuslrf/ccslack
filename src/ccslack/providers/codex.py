@@ -56,6 +56,17 @@ _CODEX_BUILTINS: dict[str, str] = {
 }
 
 _MAX_TOOL_SUMMARY = 200
+
+# System-level XML tags Codex injects into ``role=user`` messages. These are
+# internal context (permissions, environment, thread goals, etc.), not human
+# input — filter them from Slack forwarding and user-turn detection.
+_CODEX_SYSTEM_TAGS: tuple[str, ...] = (
+    "<permissions",
+    "<environment_context",
+    "<codex_internal_context",
+    "<untrusted_objective>",
+)
+
 _TOOL_NAME_ALIASES: dict[str, str] = {
     "request_user_input": "AskUserQuestion",
     "apply_patch": "Edit",
@@ -424,12 +435,19 @@ def _parse_response_message(
     payload: dict[str, Any],
     pending: dict[str, Any],
 ) -> tuple[list[AgentMessage], dict[str, Any]]:
-    """Parse message payloads (assistant/user text)."""
+    """Parse message payloads (assistant/user text).
+
+    System-level ``role=user`` messages (``<codex_internal_context>``,
+    ``<permissions>``, ``<environment_context>``, etc.) are internal
+    context, not human input — filtered from Slack forwarding.
+    """
     role = payload.get("role", "")
     if role not in ("user", "assistant"):
         return [], pending
     text = _extract_text_blocks(payload.get("content", ""))
     if not text:
+        return [], pending
+    if role == "user" and text.startswith(_CODEX_SYSTEM_TAGS):
         return [], pending
     phase = payload.get("phase")
     return (
@@ -501,6 +519,8 @@ def _parse_input_item(
         return [], pending
     content = payload.get("content", "")
     if not isinstance(content, str) or not content:
+        return [], pending
+    if content.startswith(_CODEX_SYSTEM_TAGS):
         return [], pending
     return ([AgentMessage(text=content, role="user", content_type="text")], pending)
 
@@ -785,7 +805,7 @@ class CodexProvider(JsonlProvider):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "input_text":
                         text = block.get("text", "")
-                        if text.startswith(("<permissions", "<environment_context")):
+                        if text.startswith(_CODEX_SYSTEM_TAGS):
                             return False
             return True
         return entry_type == "input_item" and payload.get("role") == "user"
@@ -805,6 +825,8 @@ class CodexProvider(JsonlProvider):
             text = _extract_text_blocks(content)
             if not text:
                 return None
+            if role == "user" and text.startswith(_CODEX_SYSTEM_TAGS):
+                return None
             return AgentMessage(
                 text=text,
                 role=cast(MessageRole, role),
@@ -814,6 +836,8 @@ class CodexProvider(JsonlProvider):
             content = payload.get("content", "")
             text = content if isinstance(content, str) else ""
             if not text:
+                return None
+            if text.startswith(_CODEX_SYSTEM_TAGS):
                 return None
             return AgentMessage(text=text, role="user", content_type="text")
 

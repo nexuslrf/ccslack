@@ -94,6 +94,9 @@ max-statements = 60
 # Inbound text dispatch forks on marker vs pane-diff shell capture;
 # complexity is inherent to that branching, not a smell.
 "src/ccslack/handlers/text.py" = ["C901"]
+# Codex provider's parse_history_entry has many early-return guards for
+# system-level message filtering.
+"src/ccslack/providers/codex.py" = ["PLR0911"]
 
 [tool.deptry.per_rule_ignores]
 DEP002 = ["deptry", "pyright", "pytest", "pytest-asyncio", "pytest-cov", "pytest-timeout", "ruff", "hypothesis"]
