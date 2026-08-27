@@ -301,7 +301,7 @@ async def _check_auto_toolbar(
             await bolt.chat_postMessage(
                 channel=channel_id,
                 text=(
-                    f":bell: <@channel> Agent has been waiting for input "
+                    f":bell: <!channel> Agent has been waiting for input "
                     f"for {int(elapsed / 60)} min in <#{channel_id}>. "
                     "Use the toolbar to approve or respond."
                 ),
