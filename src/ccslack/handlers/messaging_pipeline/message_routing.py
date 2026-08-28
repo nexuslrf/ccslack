@@ -231,7 +231,11 @@ async def _route_to_channel(
     from ..status import update_status
     from . import turn_threads
 
-    mark_active(window_id)
+    # Reset the auto-toolbar hang timer only on agent text output — not on
+    # tool_use/tool_result (internal workflow; the agent may pause between
+    # them waiting for approval without visible output).
+    if msg.role != "user" and msg.content_type in ("text", "thinking"):
+        mark_active(window_id)
 
     # A fresh user message closes the previous turn's tool thread (if any)
     # so the new exchange starts with a clean parent.
