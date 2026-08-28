@@ -228,9 +228,10 @@ async def _tick(client: SlackClient, update_status) -> None:  # noqa: ANN001
         # so calling it unconditionally won't spam. We can't wait for
         # active→idle decay (5 s) because Codex's exec-approval prompt sits on
         # top of an "active" pane the instant streaming pauses.
-        from .prompt_probe import maybe_post_prompt
+        if config.live_picker:
+            from .prompt_probe import maybe_post_prompt
 
-        await maybe_post_prompt(client, channel_id, window_id)
+            await maybe_post_prompt(client, channel_id, window_id)
 
         # Marker-driven shell monitor: for shell-provider windows, passively
         # poll the pane and relay output as it streams. Falls back silently

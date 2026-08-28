@@ -151,6 +151,9 @@ async def test_going_quieter_does_not_flush():
 
 @pytest.mark.asyncio
 async def test_silent_does_not_suppress_interactive_picker(monkeypatch):
+    from ccslack.config import config as _cfg
+
+    monkeypatch.setattr(_cfg, "live_picker", True)
     _bind("C1", "@1")
     window_store.set_notification_mode("@1", "silent")
     entered = {}

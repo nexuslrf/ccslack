@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import structlog.contextvars
 
 from ... import session_query, window_query
+from ...config import config
 from ...session_monitor import NewMessage
 from ...slack_sender import MAX_POST_CHARS, safe_post, safe_send_long, safe_update
 
@@ -142,6 +143,7 @@ async def _pre_post_suppressed(
     if (
         msg.content_type == "tool_use"
         and (msg.tool_name or "") in INTERACTIVE_TOOL_NAMES
+        and config.live_picker
     ):
         await enter_interactive_mode(
             client,

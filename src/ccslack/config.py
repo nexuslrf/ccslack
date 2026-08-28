@@ -397,6 +397,11 @@ class Config:
         self.pane_lifecycle_notify: bool = os.getenv(
             "CCSLACK_PANE_LIFECYCLE_NOTIFY", ""
         ).lower() in ("1", "true", "yes")
+        # Live picker (interactive prompt mirror). When off, the auto-toolbar
+        # (hang-detector) handles all "agent is stuck" cases instead.
+        self.live_picker: bool = os.getenv(
+            "CCSLACK_LIVE_PICKER", ""
+        ).lower() not in ("off", "0", "false", "no")
 
     def is_user_allowed(self, user_id: str) -> bool:
         """Check if a Slack user ID is in the allowed list."""
