@@ -172,16 +172,18 @@ async def end_turn(client: SlackClient, channel_id: str) -> None:
     No-op when no turn is open. Best-effort: a failed summary edit is logged
     and the state is still cleared so the next turn starts clean.
     """
-    turn = _turns.pop(channel_id, None)
-    if turn is None:
-        return
-
     # Close the auto-toolbar if one was auto-opened by the hang detector.
+    # This must run BEFORE the turn-pop check below — the auto-toolbar opens on a
+    # hang (no tool thread), so _turns may be empty when end_turn is called.
     from ...thread_router import thread_router
 
     wid = thread_router.get_window_for_channel(channel_id)
     if wid:
         _close_auto_toolbar(wid)
+
+    turn = _turns.pop(channel_id, None)
+    if turn is None:
+        return
     # Lazy: slack_sender pulls config; import at call site.
     from ...slack_sender import safe_update
 
