@@ -537,6 +537,13 @@ class SessionMonitor:
                 # trigger a switch.
                 if not _is_transcript_fresher(event.transcript_path, tracked_path):
                     continue
+                # Don't steal a session that belongs to another same-cwd
+                # window. The stale-transcript fallback is for in-TUI
+                # branching (the agent moved to a NEW session), not for
+                # pausing. If another window already claims the
+                # discovered session, the agent is just paused — stay put.
+                if event.session_id in claimed_by_others:
+                    continue
             if switch_from and event.session_id == switch_from:
                 continue  # picker still open — keep tailing the old session
             # Don't claim a session already tracked by another bound window.
