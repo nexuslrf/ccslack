@@ -239,13 +239,27 @@ class TranscriptReader:
                         new_entries.append(data)
                         safe_offset = await f.tell()
                     elif line.strip():
-                        log_throttled(
-                            logger,
-                            f"partial-jsonl:{session.session_id}",
-                            "Partial JSONL line in session %s, will retry next cycle",
-                            session.session_id,
-                        )
-                        break
+                        # Non-empty line that failed to parse. Could be a
+                        # partial write (agent mid-stream) or a permanently
+                        # corrupted line. If we're at EOF, skip it
+                        # to avoid getting stuck retrying forever.
+                        current_pos = await f.tell()
+                        if current_pos >= file_size:
+                            safe_offset = current_pos
+                            logger.warning(
+                                "Corrupted last line in session %s at "
+                                "offset %d, skipping",
+                                session.session_id,
+                                session.last_byte_offset,
+                            )
+                        else:
+                            log_throttled(
+                                logger,
+                                f"partial-jsonl:{session.session_id}",
+                                "Partial JSONL line in session %s, will retry next cycle",
+                                session.session_id,
+                            )
+                            break
                     else:
                         safe_offset = await f.tell()
 
