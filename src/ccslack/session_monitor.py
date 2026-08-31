@@ -458,8 +458,6 @@ class SessionMonitor:
             switch_from = getattr(state, "session_switch_from", "") if state else ""
             switch_at = getattr(state, "session_switch_at", 0.0) if state else 0.0
             if switch_from:
-                import time
-
                 if time.monotonic() - switch_at > _SESSION_SWITCH_TIMEOUT_SECS:
                     # Timed out — user likely cancelled the picker.
                     window_store.clear_session_switch_pending(window_id)
