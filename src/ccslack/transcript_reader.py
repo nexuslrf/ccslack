@@ -241,9 +241,25 @@ class TranscriptReader:
                     elif line.strip():
                         # Non-empty line that failed to parse. Could be a
                         # partial write (agent mid-stream) or a permanently
-                        # corrupted line. If we're at EOF, skip it
-                        # to avoid getting stuck retrying forever.
+                        # corrupted line. Peek ahead: if the next
+                        # line starts with '{', this line is permanently
+                        # corrupted (a valid JSONL line follows) — skip it
+                        # and continue. Otherwise it's a partial write
+                        # at EOF — break and retry next cycle.
                         current_pos = await f.tell()
+                        peek = await f.read(1)
+                        if peek == "{":
+                            # Next line starts a new JSON object — the
+                            # current line is permanently corrupted, not partial.
+                            logger.warning(
+                                "Corrupted line in session %s at offset %d, "
+                                "skipping",
+                                session.session_id,
+                                session.last_byte_offset,
+                            )
+                            # Advance past the bad line and continue.
+                            safe_offset = current_pos
+                            continue
                         if current_pos >= file_size:
                             safe_offset = current_pos
                             logger.warning(
