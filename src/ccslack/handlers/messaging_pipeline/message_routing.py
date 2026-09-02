@@ -421,19 +421,42 @@ async def _post_or_pair(
     # into section blocks in the same message. Applies to plain agent text;
     # multi-table answers post as a sequence.
     if inline_tables:
+        from ..slack_sender import post_blocks_or_none
+
         first_ts: str | None = None
+        native_failed = False
         for blocks, fallback in inline_tables:
-            ts = await safe_post(
+            # Blocks-only post — detect rejection instead of safe_post's
+            # silent plain-text fallback, so the offer button (native retry
+            # → PNG) can fire as the safety net.
+            ts = await post_blocks_or_none(
                 client,
                 channel=channel_id,
                 text=fallback,
                 blocks=blocks,
                 thread_ts=thread_ts,
             )
+            if ts is None:
+                # Slack rejected the table blocks — post this segment as
+                # plain text so the content is never lost.
+                native_failed = True
+                ts = await safe_post(
+                    client,
+                    channel=channel_id,
+                    text=fallback,
+                    thread_ts=thread_ts,
+                )
             if ts:
                 purge.record(channel_id, ts, thread_ts=thread_ts, kind="answer")
                 if first_ts is None:
                     first_ts = ts
+        if native_failed:
+            # Safety net: worst-case table (native blocks rejected) — offer
+            # the button, which retries natively and falls back to a PNG
+            # image render if Slack rejects again.
+            from ..table_render import maybe_offer_table_render
+
+            await maybe_offer_table_render(client, channel_id, decorated)
         return first_ts
 
     if msg.content_type == "tool_use" and msg.tool_use_id:

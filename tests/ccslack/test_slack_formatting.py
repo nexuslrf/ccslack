@@ -54,3 +54,45 @@ def test_to_blocks_long_code_chunks_without_truncation():
     )
     assert joined.count("C") == 7000  # every code char preserved, none truncated
     assert "…" not in joined
+
+
+def test_header_h1_becomes_bold():
+    from ccslack.slack_formatting import to_mrkdwn
+
+    assert to_mrkdwn("# Title") == "*Title*"
+
+
+def test_header_h2_h6_become_bold():
+    from ccslack.slack_formatting import to_mrkdwn
+
+    assert to_mrkdwn("## Subtitle") == "*Subtitle*"
+    assert to_mrkdwn("### Deep") == "*Deep*"
+    assert to_mrkdwn("###### Deepest") == "*Deepest*"
+
+
+def test_header_inline_in_paragraph():
+    from ccslack.slack_formatting import to_mrkdwn
+
+    text = "intro\n\n## Results\n\ndone"
+    assert "*Results*" in to_mrkdwn(text)
+    assert "##" not in to_mrkdwn(text)
+
+
+def test_hashtag_without_space_stays_literal():
+    from ccslack.slack_formatting import to_mrkdwn
+
+    assert to_mrkdwn("#hashtag") == "#hashtag"
+    assert to_mrkdwn("a # b") == "a # b"
+
+
+def test_header_bold_combined():
+    from ccslack.slack_formatting import to_mrkdwn
+
+    # Header containing bold: "# **Big** Title" → "*Big Title*"
+    assert to_mrkdwn("# **Big** Title") == "*Big Title*"
+
+
+def test_header_trailing_whitespace_trimmed():
+    from ccslack.slack_formatting import to_mrkdwn
+
+    assert to_mrkdwn("# Title  ") == "*Title*"

@@ -33,6 +33,10 @@ FALLBACK_TEXT_LIMIT = 12000
 _CODE_FENCE_RE = re.compile(r"```(?:[\w-]+)?\n?(.*?)```", re.DOTALL)
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
+# Markdown ATX header: 1-6 leading hashes + space + text. Slack mrkdwn has no
+# header syntax — render the line bold instead (## Sub is not distinguishable
+# from # Title, so all levels map to the same bold).
+_HEADER_RE = re.compile(r"^#{1,6}[ \t]+(.+?)\s*$", re.MULTILINE)
 
 
 def to_mrkdwn(text: str) -> str:
@@ -41,11 +45,23 @@ def to_mrkdwn(text: str) -> str:
     Order matters: links are converted before any other ``*`` munging.
     """
     text = _LINK_RE.sub(r"<\2|\1>", text)
+    # Markdown headers (# … ######) → bold lines; requires whitespace after the
+    # hashes so ``#hashtag`` or ``#!`` stay literal. Runs BEFORE the bold
+    # conversion: an inner ``**x**`` flattens into the header bold (mrkdwn
+    # can't nest bold-in-bold).
+    text = _HEADER_RE.sub(_header_to_bold, text)
     # Convert CommonMark bold ``**x**`` to Slack bold ``*x*``. Slack mrkdwn does
     # not distinguish bold from italic via the surrounding char (``*`` always
     # bold; ``_`` always italic), so a one-step substitution is enough.
     text = _BOLD_RE.sub(r"*\1*", text)
     return text
+
+
+def _header_to_bold(match: re.Match) -> str:
+    """Header-line replacement: ``# Title`` → ``*Title*`` (``**`` flattened)."""
+    content = match.group(1).strip()
+    content = content.replace("**", "")
+    return f"*{content}*"
 
 
 def _fallback_text(text: str) -> str:

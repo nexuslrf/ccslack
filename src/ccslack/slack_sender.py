@@ -179,6 +179,44 @@ async def _post_one(
             return None
 
 
+async def post_blocks_or_none(
+    client: SlackClient,
+    *,
+    channel: str,
+    text: str,
+    blocks: list[dict[str, Any]],
+    thread_ts: str | None = None,
+    **kwargs: Any,
+) -> str | None:
+    """Post one message with blocks verbatim — NO plain-text fallback.
+
+    Returns the new message ts on success, or None when Slack rejected the
+    blocks (``invalid_blocks`` etc.) or the post failed. Unlike ``safe_post``,
+    a rejected blocks payload is NOT silently retried as plain text — callers
+    use this when they must know whether the BLOCKS rendering succeeded
+    (e.g. native table rendering falling back to plain text + an offer
+    button, or to a PNG render).
+    """
+    await rate_limit_send(channel)
+    payload: dict[str, Any] = {
+        "channel": channel,
+        "text": text[:FALLBACK_TEXT_LIMIT],
+        "blocks": _cap_blocks(blocks),
+    }
+    if thread_ts is not None:
+        payload["thread_ts"] = thread_ts
+    payload.update(kwargs)
+    try:
+        result = await client.chat_postMessage(**payload)
+        return result.get("ts") if hasattr(result, "get") else result["ts"]
+    except SlackApiError as exc:
+        logger.warning(
+            "post_blocks_or_none: blocks rejected (%s)",
+            exc.response.get("error") if exc.response else exc,
+        )
+        return None
+
+
 async def safe_update(
     client: SlackClient,
     *,

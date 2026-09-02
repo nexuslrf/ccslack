@@ -434,16 +434,22 @@ async def _post_native_tables(
         return False  # at least one table exceeds native limits — fall back
 
     from . import purge
+    from ..slack_sender import post_blocks_or_none
 
     for table in table_dicts:
-        ts = await safe_post(
+        # Blocks-only post — no silent plain-text fallback. A rejected table
+        # block must return False so the caller falls through to the PNG
+        # renderer (safe_post would swallow the rejection and return a
+        # truthy ts from its plain-text retry).
+        ts = await post_blocks_or_none(
             client,
             channel=channel_id,
             text="Table",
             blocks=[table],
         )
-        if ts:
-            purge.record(channel_id, ts, kind="answer")
+        if ts is None:
+            return False  # Slack rejected the table block — PNG fallback
+        purge.record(channel_id, ts, kind="answer")
     return True
 
 
