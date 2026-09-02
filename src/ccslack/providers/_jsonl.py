@@ -27,6 +27,7 @@ from ccslack.providers.base import (
     MessageRole,
     ProviderCapabilities,
     RESUME_ID_RE,
+    SessionCandidate,
     SessionStartEvent,
     StatusUpdate,
 )
@@ -250,6 +251,13 @@ class JsonlProvider:
         tty: str,  # noqa: ARG002 — protocol signature
     ) -> SessionStartEvent | None:
         return None
+
+    def list_sessions_for_cwd(
+        self,
+        cwd: str,  # noqa: ARG002 — protocol signature
+        limit: int = 6,  # noqa: ARG002 — protocol signature
+    ) -> list[SessionCandidate]:
+        return []
 
     def discover_commands(
         self,

@@ -31,6 +31,7 @@ from ccslack.providers.base import (
     AgentMessage,
     DiscoveredCommand,
     ProviderCapabilities,
+    SessionCandidate,
     SessionStartEvent,
 )
 from ccslack.providers.pi_discovery import _PI_TELEGRAM_BUILTINS, discover_pi_commands
@@ -412,6 +413,37 @@ class PiProvider(JsonlProvider):
         )
 
     # ── Commands ─────────────────────────────────────────────────────────
+
+    def list_sessions_for_cwd(
+        self, cwd: str, limit: int = 6
+    ) -> list[SessionCandidate]:
+        """List recent pi sessions for *cwd* (attach picker), newest first."""
+        try:
+            resolved = str(Path(cwd).resolve())
+        except OSError:
+            return []
+        out: list[SessionCandidate] = []
+        for mtime, path in _candidate_transcripts(cwd)[: limit * 2]:
+            header = read_session_header(str(path))
+            if not header:
+                continue
+            try:
+                if str(Path(header["cwd"]).resolve()) != resolved:
+                    continue
+            except OSError:
+                continue
+            label = path.name.split("_", 1)[0]  # filename timestamp
+            out.append(
+                SessionCandidate(
+                    session_id=header["id"],
+                    summary=label,
+                    mtime=mtime,
+                    transcript_path=str(path),
+                )
+            )
+            if len(out) >= limit:
+                break
+        return out
 
     def discover_commands(self, base_dir: str) -> list[DiscoveredCommand]:
         return discover_pi_commands(base_dir)

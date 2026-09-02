@@ -17,7 +17,6 @@ Re-exported from transcript_reader for backward-compatible imports.
 """
 
 import asyncio
-import os
 import structlog
 import time
 from collections.abc import Awaitable, Callable
@@ -63,63 +62,11 @@ _HOOKLESS_REDISCOVERY_MAX_AGE = 86400.0
 # (user cancelled the picker or the switch failed). Bounds the window's
 # anti-hijack vulnerability.
 _SESSION_SWITCH_TIMEOUT_SECS = 120.0
-# A tracked transcript with no writes for this long is considered stale —
-# the agent branched/forked in-TUI without firing a hook. The monitor
-# falls back to discover_transcript() to find the active one.
-_STALE_TRANSCRIPT_SECS = 10.0
 _MSG_PREVIEW_LENGTH = 80
 
 logger = structlog.get_logger()
 
 _SessionMapError = (json.JSONDecodeError, OSError)
-
-
-def _is_transcript_stale(transcript_path: str) -> bool:
-    """True when a transcript file hasn't been written to recently.
-
-    Used by the hookless discovery loop to detect in-TUI branching: the
-    agent stopped writing to the tracked transcript (it moved to a new
-    session), so discovery should rebind to the newest active transcript.
-    Returns True for missing paths (can't confirm freshness) so the caller
-    only switches when the old file is genuinely frozen.
-    """
-    if not transcript_path:
-        return True
-    try:
-        mtime = os.path.getmtime(transcript_path)
-    except OSError:
-        return True
-    return (time.time() - mtime) > _STALE_TRANSCRIPT_SECS
-
-
-def _is_transcript_fresher(
-    candidate_path: str, tracked_path: str, *, now: float | None = None
-) -> bool:
-    """True when *candidate* is actively being written AND newer than *tracked*.
-
-    Guards the stale-transcript switch: only rebind when the discovered
-    session is genuinely active (written within _STALE_TRANSCRIPT_SECS) and
-    has a newer mtime than the tracked one. This prevents cycling through
-    each other's abandoned sessions when multiple agents share a cwd.
-    """
-    if not candidate_path:
-        return False
-    t = now if now is not None else time.time()
-    try:
-        candidate_mtime = os.path.getmtime(candidate_path)
-    except OSError:
-        return False
-    # Candidate must be actively being written (not stale itself).
-    if t - candidate_mtime > _STALE_TRANSCRIPT_SECS:
-        return False
-    # Candidate must be newer than the tracked transcript.
-    if not tracked_path:
-        return True
-    try:
-        tracked_mtime = os.path.getmtime(tracked_path)
-    except OSError:
-        return True  # tracked file gone — candidate is fresher by default
-    return candidate_mtime > tracked_mtime
 
 
 class SessionMonitor:
@@ -521,38 +468,17 @@ class SessionMonitor:
             # as the one we're switching from, keep waiting (user is still
             # navigating the picker).
             #
-            # Exception 2: the tracked transcript is stale (no new writes for
-            # _STALE_TRANSCRIPT_SECS) — the agent branched/forked in-TUI
-            # without firing a hook. Allow the switch to the newest transcript.
+            # Never auto-switch a bound session. The stale-transcript
+            # heuristic (any fresher same-cwd transcript wins) hijacked
+            # external/nested sessions (claude extension sessions, parallel
+            # terminals) every time the bound agent paused — cwd-based
+            # attribution cannot distinguish "my agent branched" from
+            # "someone else's session in the same dir". Rebinding is now
+            # explicit only: a SessionStart hook for this window (the
+            # authoritative signal), the /resume switch flag, or the
+            # /ccslack attach picker.
             if rediscovery:
-                tracked_path = state.transcript_path if state else ""
-                if not _is_transcript_stale(tracked_path):
-                    continue  # tracked session still active — don't hijack
-                # Hook-managed providers (claude, codex): the SessionStart
-                # hook is the authoritative window↔session mapping — the
-                # stale-transcript switch fights it and hijacks EXTERNAL
-                # sessions in the same cwd (e.g. claude launched from an
-                # editor extension) the moment the bound agent pauses
-                # >10s. Skip the switch entirely; /ccslack attach is the
-                # manual recovery path for a genuinely-lost binding.
-                if caps.hook_install_managed_by_ccslack:
-                    continue
-                # Tracked transcript is stale, but only switch if the
-                # discovered session is ACTIVELY being written (fresh mtime)
-                # AND newer than the tracked one. This prevents cycling
-                # through each other's abandoned sessions when multiple
-                # agents share a cwd — a stale-but-not-switched transcript
-                # (agent is just thinking / waiting on a prompt) should not
-                # trigger a switch.
-                if not _is_transcript_fresher(event.transcript_path, tracked_path):
-                    continue
-                # Don't steal a session that belongs to another same-cwd
-                # window. The stale-transcript fallback is for in-TUI
-                # branching (the agent moved to a NEW session), not for
-                # pausing. If another window already claims the
-                # discovered session, the agent is just paused — stay put.
-                if event.session_id in claimed_by_others:
-                    continue
+                continue
             if switch_from and event.session_id == switch_from:
                 continue  # picker still open — keep tailing the old session
             # Don't claim a session already tracked by another bound window.
@@ -575,17 +501,6 @@ class SessionMonitor:
                 state.created_at = time.time()
             # Log the switch (here, after all guards pass) so the log isn't
             # spammed by already_claimed rejections every tick.
-            if rediscovery:
-                logger.info(
-                    "Stale transcript for window %s (session %s); "
-                    "switching to %s",
-                    window_id,
-                    state.session_id if state else "",
-                    event.session_id,
-                )
-                # Update created_at so future discovery uses the new
-                # session's era as the min_mtime floor.
-                state.created_at = time.time()
             session_map_sync.register_hookless_session(
                 window_id,
                 event.session_id,

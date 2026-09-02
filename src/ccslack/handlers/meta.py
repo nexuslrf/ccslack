@@ -195,6 +195,7 @@ def register(app: AsyncApp) -> None:
     register_dashboard_actions(app)
     register_relaunch_actions(app)
     register_join_actions(app)
+    _register_attach_pick_action(app)
 
     slash = config.slash_command
 
@@ -427,7 +428,7 @@ def register(app: AsyncApp) -> None:
             return
 
         if sub == "attach":
-            await _handle_attach(client, channel_id, user_id)
+            await _handle_attach(client, channel_id, user_id, args)
             return
 
         if sub == "relaunch":
@@ -477,8 +478,9 @@ def _help_text() -> str:
         f"• `{slash} fleet` — multi-host: per-host connection + session status.\n"
         f"• `{slash} history [N]` — last N transcript messages in this channel.\n"
         f"• `{slash} resume` — pick a past Claude session in this channel's cwd.\n"
-        f"• `{slash} attach` — detect the agent running in this channel's tmux "
-        "pane and bind to its session (recovery for lost bindings).\n"
+        f"• `{slash} attach [list]` — bind this channel to a running agent "
+        "session: auto-detect, or `list` to pick from recent sessions when "
+        "several share the directory.\n"
         f"• `{slash} restore [continue|resume|fresh]` — respawn a dead session "
         "(after reboot / tmux restart).\n"
         f"• `{slash} revive <channel> [continue|resume|fresh]` — bring back a "
@@ -1569,6 +1571,7 @@ async def _handle_attach(
     client,  # noqa: ANN001
     channel_id: str,
     user_id: str,
+    args: list[str] | None = None,
 ) -> None:
     """``/ccslack attach`` — detect the bound tmux pane's agent session and bind to it.
 
@@ -1615,6 +1618,20 @@ async def _handle_attach(
     cwd = window.cwd or ""
     pane_cmd = window.pane_current_command or ""
     provider_name = detect_provider_from_command(pane_cmd)
+
+    # ``/ccslack attach list`` → session picker. When many sessions share the
+    # cwd (extension sessions, parallel terminals, agents-UI background
+    # sessions), auto-detection is ambiguous — the picker makes the binding an
+    # explicit, deterministic user choice.
+    wants_list = bool(args) and args[0].lower() in ("list", "pick", "ls")
+    if wants_list:
+        if not provider_name:
+            provider_name = _attach_state_provider(window_id)
+        await _post_attach_picker(
+            client, channel_id, user_id, window_id, provider_name or "", cwd
+        )
+        return
+
     if not provider_name:
         await _post_ephemeral(
             client.chat_postEphemeral,
@@ -1695,6 +1712,140 @@ async def _handle_attach(
             f"in `{event.cwd}` (tmux `{window_id}`)."
         ),
     )
+
+
+def _attach_state_provider(window_id: str) -> str:
+    """Best-effort provider name from the window's persisted state."""
+    view = session_manager.view_window(window_id)
+    return (view.provider_name if view else "") or ""
+
+
+async def _post_attach_picker(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    window_id: str,
+    provider_name: str,
+    cwd: str,
+) -> None:
+    """Ephemeral session picker for /ccslack attach list."""
+    from ..providers import get_provider_for_window
+    from ..providers.base import SessionCandidate
+
+    candidates: list[SessionCandidate] = []
+    if provider_name:
+        provider = get_provider_for_window(window_id, provider_name=provider_name)
+        candidates = await asyncio.to_thread(
+            provider.list_sessions_for_cwd, cwd, 6
+        )
+    if not candidates:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: no recent sessions found in `{cwd}`"
+                + (f" for `{provider_name}`" if provider_name else "")
+                + ". Start the agent first, then re-run attach."
+            ),
+        )
+        return
+
+    elements: list[dict[str, Any]] = []
+    for cand in candidates:
+        label = cand.summary.strip().replace("\n", " ")[:70] or cand.session_id[:12]
+        elements.append(
+            {
+                "type": "button",
+                "action_id": f"ccslack_attach_pick:{cand.session_id}",
+                "text": {"type": "plain_text", "text": label[:75]},
+                "value": window_id,
+            }
+        )
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f":link: Pick a session to attach in <#{channel_id}> "
+                    f"({len(candidates)} recent in `{cwd}`)."
+                ),
+            },
+        },
+        {"type": "actions", "elements": elements},
+    ]
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=f"Attach picker — {len(candidates)} session(s)",
+        blocks=blocks,
+    )
+
+
+def _register_attach_pick_action(app) -> None:  # noqa: ANN001
+    """Wire the ccslack_attach_pick:<session_id> picker buttons."""
+    import re as _re
+
+    @app.action(_re.compile(r"^ccslack_attach_pick:.+$"))
+    async def on_attach_pick(ack, body, client) -> None:  # noqa: ANN001
+        await ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel_id = body.get("channel", {}).get("id", "")
+        from .auth import is_authorized
+
+        if not is_authorized(user_id, channel_id) or not channel_id:
+            return
+        action_id = ""
+        window_id = ""
+        for action in body.get("actions", []) or []:
+            aid = action.get("action_id", "")
+            if aid.startswith("ccslack_attach_pick:"):
+                action_id = aid
+                window_id = action.get("value", "")
+                break
+        if not action_id or not window_id:
+            return
+        session_id = action_id.split(":", 1)[1]
+
+        from ..providers import get_provider_for_window
+        from ..session_map import session_map_sync
+
+        view = session_manager.view_window(window_id)
+        cwd = (view.cwd if view else "") or ""
+        provider_name = (view.provider_name if view else "") or ""
+        provider = get_provider_for_window(window_id, provider_name=provider_name)
+        transcript = await asyncio.to_thread(
+            provider.resolve_session_transcript, session_id, cwd
+        )
+        if not transcript:
+            await _post_ephemeral(
+                client.chat_postEphemeral,
+                channel=channel_id,
+                user=user_id,
+                text=f"ccslack: couldn't resolve session `{session_id[:12]}…`.",
+            )
+            return
+        session_map_sync.register_hookless_session(
+            window_id, session_id, cwd, transcript, provider_name
+        )
+        try:
+            await asyncio.to_thread(
+                session_map_sync.write_hookless_session_map,
+                window_id, session_id, cwd, transcript, provider_name,
+            )
+        except OSError:
+            logger.exception("attach pick: session_map write failed for %s", window_id)
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f":link: Attached `{provider_name}` session "
+                f"`{session_id[:12]}…` (tmux `{window_id}`)."
+            ),
+        )
 
 
 async def _handle_grant(

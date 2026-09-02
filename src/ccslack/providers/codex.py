@@ -25,6 +25,7 @@ from ccslack.providers.base import (
     AgentMessage,
     MessageRole,
     ProviderCapabilities,
+    SessionCandidate,
     SessionStartEvent,
     StatusUpdate,
 )
@@ -978,6 +979,43 @@ class CodexProvider(JsonlProvider):
             transcript_path=str(best_path),
             window_key="",
         )
+
+    def list_sessions_for_cwd(
+        self, cwd: str, limit: int = 6
+    ) -> list[SessionCandidate]:
+        """List recent primary codex sessions for *cwd* (attach picker)."""
+        sessions_dir = Path.home() / ".codex" / "sessions"
+        if not sessions_dir.is_dir():
+            return []
+        try:
+            resolved_cwd = str(Path(cwd).resolve())
+        except OSError:
+            return []
+        worktrees_root = Path.home() / ".codex" / "worktrees"
+        out: list[SessionCandidate] = []
+        for mtime, fpath in _collect_codex_sessions(sessions_dir)[: limit * 4]:
+            meta = _read_codex_session_meta(fpath)
+            if not meta or not _is_primary_codex_session(meta):
+                continue
+            file_cwd = meta.get("cwd", "")
+            if not file_cwd or not _cwd_matches(file_cwd, resolved_cwd, worktrees_root):
+                continue
+            session_id = meta.get("id", "")
+            if not session_id:
+                continue
+            # The filename timestamp is the most compact readable label.
+            label = fpath.stem
+            out.append(
+                SessionCandidate(
+                    session_id=session_id,
+                    summary=label,
+                    mtime=mtime,
+                    transcript_path=str(fpath),
+                )
+            )
+            if len(out) >= limit:
+                break
+        return out
 
     # ── Status snapshot (Codex-specific) ─────────────────────────────
 

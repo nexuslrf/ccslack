@@ -56,6 +56,23 @@ class AgentMessage:
 
 
 @dataclass(frozen=True, slots=True)
+class SessionCandidate:
+    """A resumable/attachable session listed by the attach picker.
+
+    Attributes:
+        session_id: Provider session identifier.
+        summary: Short human label (first prompt, filename timestamp, …).
+        mtime: Transcript mtime (Unix seconds) — newest-first ordering.
+        transcript_path: Absolute path to the session transcript.
+    """
+
+    session_id: str
+    summary: str
+    mtime: float
+    transcript_path: str
+
+
+@dataclass(frozen=True, slots=True)
 class StatusUpdate:
     """Parsed terminal status line from the agent's pane.
 
@@ -305,6 +322,17 @@ class AgentProvider(Protocol):
 
         Returns a SessionStartEvent, or None if the provider can't attribute
         by process tree (falls back to ``discover_transcript``).
+        """
+        ...
+
+    def list_sessions_for_cwd(
+        self, cwd: str, limit: int = 6
+    ) -> list[SessionCandidate]:
+        """List recent sessions for a cwd, newest first (attach picker).
+
+        Returns up to *limit* candidates matching *cwd*. Providers that
+        can't enumerate by cwd return an empty list (picker falls back to
+        the provider's generic message).
         """
         ...
 

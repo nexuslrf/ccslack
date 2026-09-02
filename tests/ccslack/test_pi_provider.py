@@ -300,3 +300,37 @@ def test_discover_transcript_min_mtime_excludes_old(tmp_path, monkeypatch):
     )
     assert event3 is not None
     assert event3.session_id == "01a-new"
+
+
+def test_list_sessions_for_cwd_newest_first(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    _write_session(tmp_path, session_id="01a-old", cwd=str(proj), age=60.0)
+    _write_session(tmp_path, session_id="01a-new", cwd=str(proj), age=1.0)
+    cands = PiProvider().list_sessions_for_cwd(str(proj))
+    assert len(cands) == 2
+    assert cands[0].session_id == "01a-new"  # newest first
+    assert cands[1].session_id == "01a-old"
+    assert cands[0].transcript_path.endswith("01a-new.jsonl")
+
+
+def test_list_sessions_for_cwd_skips_other_cwd(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    _write_session(tmp_path, session_id="01a-mine", cwd=str(proj))
+    _write_session(tmp_path, session_id="01a-theirs", cwd=str(tmp_path / "other"))
+    cands = PiProvider().list_sessions_for_cwd(str(proj))
+    assert len(cands) == 1
+    assert cands[0].session_id == "01a-mine"
+
+
+def test_list_sessions_for_cwd_limit(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    for i in range(8):
+        _write_session(tmp_path, session_id=f"01a-s{i}", cwd=str(proj), age=float(i))
+    cands = PiProvider().list_sessions_for_cwd(str(proj), limit=3)
+    assert len(cands) == 3

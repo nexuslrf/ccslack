@@ -22,6 +22,7 @@ from ccslack.providers.base import (
     DiscoveredCommand,
     MessageRole,
     ProviderCapabilities,
+    SessionCandidate,
     SessionStartEvent,
     StatusUpdate,
 )
@@ -452,6 +453,46 @@ class ClaudeProvider:
                 window_key="",
             )
         return None
+
+    def list_sessions_for_cwd(
+        self, cwd: str, limit: int = 6
+    ) -> list[SessionCandidate]:
+        """List recent claude sessions for *cwd* (attach picker), newest first.
+
+        Scans the cwd's project dir for *.jsonl transcripts and extracts a
+        summary (first user prompt) from each transcript's header entries.
+        """
+        from ccslack.utils import read_session_metadata_from_jsonl
+
+        try:
+            resolved = str(Path(cwd).resolve())
+        except OSError:
+            return []
+        project_dir = Path.home() / ".claude" / "projects" / _encode_cwd_dirname(cwd)
+        out: list[SessionCandidate] = []
+        for mtime, fpath in _candidate_transcripts(project_dir)[: limit * 2]:
+            session_id = fpath.stem
+            if not UUID_RE.match(session_id):
+                continue
+            file_cwd, summary = read_session_metadata_from_jsonl(fpath)
+            if not file_cwd:
+                continue
+            try:
+                if str(Path(file_cwd).resolve()) != resolved:
+                    continue
+            except OSError:
+                continue
+            out.append(
+                SessionCandidate(
+                    session_id=session_id,
+                    summary=(summary or session_id[:12])[:60],
+                    mtime=mtime,
+                    transcript_path=str(fpath),
+                )
+            )
+            if len(out) >= limit:
+                break
+        return out
 
     def discover_commands(self, base_dir: str) -> list[DiscoveredCommand]:
         _ = base_dir
