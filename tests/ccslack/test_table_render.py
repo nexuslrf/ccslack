@@ -120,3 +120,71 @@ def test_offer_remembers_blocks_under_token(monkeypatch):
     blocks = find_table_blocks(_TABLE)
     table_render._remember("tok123", "C1", blocks)
     assert table_render._PENDING["tok123"] == ("C1", blocks)
+
+
+def test_markdown_to_table_block_basic():
+    from ccslack.handlers.table_render import markdown_to_table_block
+
+    block = (
+        "| Name | Score |\n"
+        "|:-----|------:|\n"
+        "| alice | 42 |\n"
+        "| bob | 7 |"
+    )
+    table = markdown_to_table_block(block)
+    assert table is not None
+    assert table["type"] == "table"
+    assert table["rows"][0][0] == {"type": "raw_text", "text": "Name"}
+    assert table["rows"][1][1] == {"type": "raw_number", "value": 42.0, "text": "42"}
+    assert table["column_settings"][1] == {"align": "right"}
+
+
+def test_markdown_to_table_block_aligns():
+    from ccslack.handlers.table_render import markdown_to_table_block
+
+    block = (
+        "| a | b | c |\n"
+        "|:--|:-:|--:|\n"
+        "| 1 | 2 | 3 |"
+    )
+    table = markdown_to_table_block(block)
+    assert table["column_settings"] == [
+        {"align": "left"},
+        {"align": "center"},
+        {"align": "right"},
+    ]
+
+
+def test_markdown_to_table_block_negative_and_float_numbers():
+    from ccslack.handlers.table_render import markdown_to_table_block
+
+    block = "| v |\n|---|\n| -5 |\n| 3.14 |"
+    table = markdown_to_table_block(block)
+    assert table["rows"][1][0]["type"] == "raw_number"
+    assert table["rows"][1][0]["value"] == -5.0
+    assert table["rows"][2][0]["value"] == 3.14
+
+
+def test_markdown_to_table_block_text_cells():
+    from ccslack.handlers.table_render import markdown_to_table_block
+
+    block = "| v |\n|---|\n| hello world |"
+    table = markdown_to_table_block(block)
+    assert table["rows"][1][0] == {"type": "raw_text", "text": "hello world"}
+
+
+def test_markdown_to_table_block_too_many_rows():
+    from ccslack.handlers.table_render import markdown_to_table_block
+
+    rows = "\n".join(f"| {i} |" for i in range(150))
+    block = f"| v |\n|---|\n{rows}"
+    assert markdown_to_table_block(block) is None
+
+
+def test_markdown_to_table_block_char_limit():
+    from ccslack.handlers.table_render import markdown_to_table_block
+
+    cell = "x" * 100
+    rows = "\n".join(f"| {cell} | {cell} |" for _ in range(60))
+    block = f"| a | b |\n|---|---|\n{rows}"
+    assert markdown_to_table_block(block) is None

@@ -1,10 +1,12 @@
-"""Render markdown tables from agent output as images.
+"""Render markdown tables from agent output as native Slack table blocks.
 
 Slack renders markdown tables poorly (pipes and dashes, no alignment). The raw
 agent answer is always posted unchanged; when it contains a GitHub-flavored
 markdown table, this module posts an extra prompt with a button. On click the
-detected table(s) are laid out as an aligned monospace box and rendered to a
-PNG via the screenshot text renderer, then uploaded to the channel.
+detected table(s) are posted as native Slack "table" blocks (beta Block Kit —
+https://docs.slack.dev/reference/block-kit/blocks/table-block). When a table
+exceeds the native limits (100 rows, 20 cols, 10k chars, 1 table/message) or
+the API rejects the block, it falls back to the legacy PNG renderer.
 
 Pipeline:
   * ``find_table_blocks(text)``  — locate markdown table blocks (fenced code
@@ -198,7 +200,7 @@ async def maybe_offer_table_render(
     ts = await safe_post(
         client,
         channel=channel_id,
-        text=f":bar_chart: Detected a markdown {label} — render as an image?",
+        text=f":bar_chart: Detected a markdown {label} — display as table?",
         blocks=[
             {
                 "type": "section",
@@ -206,7 +208,7 @@ async def maybe_offer_table_render(
                     "type": "mrkdwn",
                     "text": (
                         f":bar_chart: The message above contains a markdown "
-                        f"{label}. Render it as an image for easier reading?"
+                        f"{label}. Display it as a native table?"
                     ),
                 },
             },
@@ -220,7 +222,7 @@ async def maybe_offer_table_render(
                         "style": "primary",
                         "text": {
                             "type": "plain_text",
-                            "text": ":frame_with_picture: Render image",
+                            "text": ":table_tennis: Display as table",
                         },
                         "value": token,
                     },
@@ -269,6 +271,20 @@ def register(app: AsyncApp) -> None:
             return
 
         _, blocks = entry
+        # Prefer native Slack table blocks — no image generation, selectable
+        # text, respects markdown column alignment. Falls back to PNG when a
+        # table exceeds native limits or the API rejects the block.
+        if await _post_native_tables(client, channel_id, blocks):
+            if message_ts:
+                with contextlib.suppress(SlackApiError):
+                    await client.chat_update(
+                        channel=channel_id,
+                        ts=message_ts,
+                        text=":table_tennis: Table displayed above.",
+                        blocks=[],
+                    )
+            return
+
         png = await render_tables_png(blocks)
         if png is None:
             with contextlib.suppress(SlackApiError):
@@ -329,3 +345,69 @@ __all__ = [
     "register",
     "render_tables_png",
 ]
+
+
+# ── Native Slack table blocks ───────────────────────────────────────────
+# Slack's Block Kit "table" block (beta) renders tabular data natively — no
+# image generation. Cell types: raw_text / raw_number / rich_text. Limits:
+# 100 rows, 20 columns, 10,000 chars per table, ONE table per message.
+# Docs: https://docs.slack.dev/reference/block-kit/blocks/table-block/
+
+_TABLE_MAX_ROWS = 100
+_TABLE_MAX_COLS = 20
+_TABLE_MAX_CHARS = 10_000
+_NUM_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
+
+
+def _table_cell(cell_text: str) -> dict:
+    """One table cell: raw_number for numerics, raw_text otherwise."""
+    stripped = cell_text.strip()
+    if _NUM_RE.match(stripped):
+        return {"type": "raw_number", "value": float(stripped), "text": stripped}
+    return {"type": "raw_text", "text": stripped}
+
+
+def markdown_to_table_block(block: str) -> dict | None:
+    """Convert one markdown table block into a Slack native table block dict.
+
+    Returns None when the table exceeds Slack's limits (too many rows/cols
+    or characters) — the caller should fall back to the image renderer.
+    """
+    rows, aligns = _parse_table(block)
+    if not rows or len(rows) > _TABLE_MAX_ROWS or len(rows[0]) > _TABLE_MAX_COLS:
+        return None
+    total_chars = sum(len(c) for r in rows for c in r)
+    if total_chars > _TABLE_MAX_CHARS:
+        return None
+    return {
+        "type": "table",
+        "rows": [[_table_cell(c) for c in r] for r in rows],
+        "column_settings": [{"align": a} for a in aligns],
+    }
+
+
+async def _post_native_tables(
+    client, channel_id: str, blocks: list[str]  # noqa: ANN001
+) -> bool:
+    """Post each detected table as a native Slack table block message.
+
+    Slack allows only ONE table block per message, so each table is its own
+    chat.postMessage. Returns True if all tables were posted; False when any
+    table exceeded native limits (caller should fall back to PNG).
+    """
+    table_dicts = [markdown_to_table_block(b) for b in blocks]
+    if any(t is None for t in table_dicts):
+        return False  # at least one table exceeds native limits — fall back
+
+    from . import purge
+
+    for table in table_dicts:
+        ts = await safe_post(
+            client,
+            channel=channel_id,
+            text="Table",
+            blocks=[table],
+        )
+        if ts:
+            purge.record(channel_id, ts, kind="answer")
+    return True
