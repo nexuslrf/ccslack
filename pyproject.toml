@@ -99,6 +99,8 @@ max-statements = 60
 "src/ccslack/providers/codex.py" = ["PLR0911"]
 # Table render action handler grew with the native-blocks + PNG fallback.
 "src/ccslack/handlers/table_render.py" = ["C901"]
+# Message routing forks on tool pairing, thread routing, tables, and purge.
+"src/ccslack/handlers/messaging_pipeline/message_routing.py" = ["C901"]
 
 [tool.deptry.per_rule_ignores]
 DEP002 = ["deptry", "pyright", "pytest", "pytest-asyncio", "pytest-cov", "pytest-timeout", "ruff", "hypothesis"]

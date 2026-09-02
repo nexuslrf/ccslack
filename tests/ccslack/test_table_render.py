@@ -188,3 +188,70 @@ def test_markdown_to_table_block_char_limit():
     rows = "\n".join(f"| {cell} | {cell} |" for _ in range(60))
     block = f"| a | b |\n|---|---|\n{rows}"
     assert markdown_to_table_block(block) is None
+
+
+def test_split_single_table_in_place():
+    from ccslack.handlers.table_render import split_into_table_messages
+
+    text = (
+        "Here is the summary:\n\n"
+        "| a | b |\n"
+        "|---|---|\n"
+        "| 1 | 2 |\n"
+        "\nThat's all."
+    )
+    msgs = split_into_table_messages(text)
+    assert msgs is not None
+    # One message: pre-text section + table block. Trailing text is its own msg.
+    assert len(msgs) == 2
+    first_blocks = msgs[0][0]
+    assert any(b["type"] == "table" for b in first_blocks)
+    assert any(b["type"] == "section" for b in first_blocks)
+    assert msgs[1][0][0]["type"] == "section"  # trailing text
+
+
+def test_split_multiple_tables_one_per_message():
+    from ccslack.handlers.table_render import split_into_table_messages
+
+    text = (
+        "Intro text.\n\n"
+        "| a | b |\n|---|---|\n| 1 | 2 |\n\n"
+        "Middle text.\n\n"
+        "| c | d |\n|---|---|\n| 3 | 4 |\n\n"
+        "Outro text."
+    )
+    msgs = split_into_table_messages(text)
+    assert msgs is not None
+    assert len(msgs) == 3  # table1+intro, table2+middle, outro
+    # Each of the first two messages has exactly one table block.
+    for blocks, _ in msgs[:2]:
+        tables = [b for b in blocks if b["type"] == "table"]
+        assert len(tables) == 1
+        assert any(b["type"] == "section" for b in blocks)
+    # Final message is text-only.
+    assert all(b["type"] != "table" for b in msgs[2][0])
+
+
+def test_split_no_table_returns_none():
+    from ccslack.handlers.table_render import split_into_table_messages
+
+    assert split_into_table_messages("just plain text") is None
+
+
+def test_split_oversized_table_returns_none():
+    from ccslack.handlers.table_render import split_into_table_messages
+
+    cell = "x" * 100
+    rows = "\n".join(f"| {cell} | {cell} |" for _ in range(60))
+    text = f"| a | b |\n|---|---|\n{rows}"
+    assert split_into_table_messages(text) is None
+
+
+def test_split_table_only_no_trailing():
+    from ccslack.handlers.table_render import split_into_table_messages
+
+    text = "| a | b |\n|---|---|\n| 1 | 2 |"
+    msgs = split_into_table_messages(text)
+    assert msgs is not None
+    assert len(msgs) == 1  # no trailing text message
+    assert msgs[0][0][0]["type"] == "table"

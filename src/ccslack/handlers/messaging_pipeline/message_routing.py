@@ -290,7 +290,20 @@ async def _route_to_channel(
         await purge.post_response_button(client, channel_id)
 
     decorated = _decorate(msg, text)
-    await _post_or_pair(client, channel_id, msg, decorated, thread_ts=thread_ts)
+    # In-place native table: when a plain agent answer contains exactly one
+    # markdown table (within Slack's native limits), embed it as a Block Kit
+    # table block directly in the message instead of posting raw pipes and
+    # offering a separate render post. Falls back to the normal post (and the
+    # offer button) for zero/multiple/oversized tables.
+    inline_tables = None
+    if msg.role != "user" and msg.content_type == "text":
+        from ..table_render import split_into_table_messages
+
+        inline_tables = split_into_table_messages(decorated)
+    await _post_or_pair(
+        client, channel_id, msg, decorated, thread_ts=thread_ts,
+        inline_tables=inline_tables,
+    )
 
     # Any agent output posted below an open live picker buries it in scrollback.
     # Flag it so the picker's refresh loop bumps a fresh copy to the bottom,
@@ -302,7 +315,7 @@ async def _route_to_channel(
     # Offer to render any markdown table in a plain agent answer as an image
     # (Slack renders tables poorly). The raw text is already posted above; this
     # only adds an opt-in button. User echoes / tool flows are skipped.
-    if msg.role != "user" and msg.content_type == "text":
+    if msg.role != "user" and msg.content_type == "text" and inline_tables is None:
         from ..table_render import maybe_offer_table_render
 
         await maybe_offer_table_render(client, channel_id, text)
@@ -369,6 +382,7 @@ async def _post_or_pair(
     decorated: str,
     *,
     thread_ts: str | None = None,
+    inline_tables: list[tuple[list[dict], str]] | None = None,
 ) -> str | None:
     """Post a transcript chunk OR pair it with a prior tool_use.
 
@@ -388,6 +402,26 @@ async def _post_or_pair(
       * Everything else — straight post.
     """
     from .. import purge
+
+    # In-place native tables: split at table boundaries — one table block
+    # per message (Slack's limit), with each table's preceding text chunked
+    # into section blocks in the same message. Applies to plain agent text;
+    # multi-table answers post as a sequence.
+    if inline_tables:
+        first_ts: str | None = None
+        for blocks, fallback in inline_tables:
+            ts = await safe_post(
+                client,
+                channel=channel_id,
+                text=fallback,
+                blocks=blocks,
+                thread_ts=thread_ts,
+            )
+            if ts:
+                purge.record(channel_id, ts, thread_ts=thread_ts, kind="answer")
+                if first_ts is None:
+                    first_ts = ts
+        return first_ts
 
     if msg.content_type == "tool_use" and msg.tool_use_id:
         ts = await safe_post(

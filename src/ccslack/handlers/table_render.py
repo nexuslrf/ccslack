@@ -30,6 +30,7 @@ from slack_sdk.errors import SlackApiError
 
 from ..config import config
 from ..slack_client import BoltSlackClient
+from ..slack_formatting import to_blocks
 from ..slack_sender import safe_post
 
 if TYPE_CHECKING:
@@ -411,3 +412,52 @@ async def _post_native_tables(
         if ts:
             purge.record(channel_id, ts, kind="answer")
     return True
+
+
+# Fallback text per message (notification preview only — Slack caps the
+# ``text`` field at 12k chars; keep it short).
+_FALLBACK_TEXT_LIMIT = 2900
+
+
+def split_into_table_messages(text: str) -> list[tuple[list[dict], str]] | None:
+    """Split *text* at markdown-table boundaries into one-message-per-table.
+
+    Each returned message carries at most ONE native table block (Slack's
+    limit) plus the section-formatted text that preceded it. Text after the
+    last table becomes its own final message. Long text segments are chunked
+    into multiple section blocks by ``to_blocks`` — so a long multi-table
+    answer splits cleanly at the table boundaries.
+
+    Returns a list of ``(blocks, fallback_text)`` tuples, or None when
+    in-place rendering doesn't apply (no table found, a table exceeds the
+    native limits, or a table doesn't appear verbatim in *text* — the
+    offer-button fallback covers those).
+    """
+    tables = find_table_blocks(text)
+    if not tables:
+        return None
+    # Any oversized table → let the offer-button flow handle it (PNG render).
+    table_dicts = [markdown_to_table_block(t) for t in tables]
+    if any(t is None for t in table_dicts):
+        return None
+
+    messages: list[tuple[list[dict], str]] = []
+    cursor = 0
+    for table_str, table in zip(tables, table_dicts, strict=True):
+        idx = text.find(table_str, cursor)
+        if idx < 0:
+            return None  # table text not found verbatim — bail
+        pre = text[cursor:idx]
+        blocks: list[dict] = []
+        if pre.strip():
+            pre_blocks, _ = to_blocks(pre)
+            blocks.extend(pre_blocks)
+        blocks.append(table)
+        segment = (pre + table_str).strip()
+        messages.append((blocks, segment[:_FALLBACK_TEXT_LIMIT]))
+        cursor = idx + len(table_str)
+    trailing = text[cursor:]
+    if trailing.strip():
+        tail_blocks, _ = to_blocks(trailing)
+        messages.append((tail_blocks, trailing[:_FALLBACK_TEXT_LIMIT]))
+    return messages or None
