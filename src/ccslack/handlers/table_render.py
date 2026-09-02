@@ -358,11 +358,44 @@ _TABLE_MAX_ROWS = 100
 _TABLE_MAX_COLS = 20
 _TABLE_MAX_CHARS = 10_000
 _NUM_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
+# Minimum length for a valid *x* / _x_ italics pair (markers must wrap content).
+_ITALIC_MIN_LEN = 2
+
+
+def _clean_cell_text(cell_text: str) -> str:
+    """Strip markdown artifacts that render literally in Slack raw_text cells.
+
+    Removes bold markers (``**x**`` → ``x``), italics (``*x*``/``_x_``), inline
+    code backticks, and leading/trailing whitespace. Leaves everything else
+    (unicode emoji, shortcodes, links) untouched.
+    """
+    cleaned = cell_text.strip()
+    cleaned = cleaned.replace("**", "")
+    cleaned = cleaned.replace("`", "")
+    # Single-asterisk italics: only when they wrap non-empty content
+    # (avoid stripping lone asterisks used as literal text).
+    for marker in ("*", "_"):
+        if (
+            cleaned.startswith(marker)
+            and cleaned.endswith(marker)
+            and len(cleaned) > _ITALIC_MIN_LEN
+        ):
+            cleaned = cleaned[1:-1]
+            break
+    return cleaned
 
 
 def _table_cell(cell_text: str) -> dict:
-    """One table cell: raw_number for numerics, raw_text otherwise."""
-    stripped = cell_text.strip()
+    """One table cell: raw_number for numerics, raw_text otherwise.
+
+    Empty cells become a single space — Slack's raw_text schema requires
+    ``minLength: 1``, and an empty string makes the whole message
+    ``invalid_blocks`` (markdown tables routinely have empty header/body
+    cells, and ``_parse_table`` pads short rows with "" too).
+    """
+    stripped = _clean_cell_text(cell_text)
+    if not stripped:
+        return {"type": "raw_text", "text": " "}
     if _NUM_RE.match(stripped):
         return {"type": "raw_number", "value": float(stripped), "text": stripped}
     return {"type": "raw_text", "text": stripped}

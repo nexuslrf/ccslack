@@ -255,3 +255,44 @@ def test_split_table_only_no_trailing():
     assert msgs is not None
     assert len(msgs) == 1  # no trailing text message
     assert msgs[0][0][0]["type"] == "table"
+
+
+def test_table_cell_empty_becomes_space():
+    from ccslack.handlers.table_render import _table_cell
+
+    # Slack raw_text requires minLength 1 — empty cells must not be "".
+    assert _table_cell("") == {"type": "raw_text", "text": " "}
+    assert _table_cell("   ") == {"type": "raw_text", "text": " "}
+
+
+def test_table_cell_strips_markdown_artifacts():
+    from ccslack.handlers.table_render import _table_cell
+
+    assert _table_cell("**bold**") == {"type": "raw_text", "text": "bold"}
+    assert _table_cell("`code`") == {"type": "raw_text", "text": "code"}
+    assert _table_cell("*ital*") == {"type": "raw_text", "text": "ital"}
+    assert _table_cell("_ital_") == {"type": "raw_text", "text": "ital"}
+
+
+def test_table_with_empty_header_cell_renders():
+    from ccslack.handlers.table_render import markdown_to_table_block
+
+    block = (
+        "| | sweep | datamix |\n"
+        "|---|---:|---:|\n"
+        "| quality `n` | 1044 | 1500 |"
+    )
+    table = markdown_to_table_block(block)
+    assert table is not None
+    # The empty header cell became a single space, not "".
+    assert table["rows"][0][0] == {"type": "raw_text", "text": " "}
+
+
+def test_short_row_padded_with_space_cells():
+    from ccslack.handlers.table_render import markdown_to_table_block
+
+    block = "| a | b |\n|---|---|\n| only-one |"
+    table = markdown_to_table_block(block)
+    assert table is not None
+    # The short row is padded to 2 cols with a space cell (not "").
+    assert table["rows"][1][1] == {"type": "raw_text", "text": " "}
