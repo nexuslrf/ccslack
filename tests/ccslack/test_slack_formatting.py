@@ -1,3 +1,5 @@
+import pytest
+
 from ccslack.slack_formatting import to_blocks, to_mrkdwn
 
 
@@ -96,3 +98,54 @@ def test_header_trailing_whitespace_trimmed():
     from ccslack.slack_formatting import to_mrkdwn
 
     assert to_mrkdwn("# Title  ") == "*Title*"
+
+
+@pytest.mark.asyncio
+async def test_inline_table_routes_end_to_end(monkeypatch):
+    """Regression: routing a text answer with a table must not crash (the
+    lazy post_blocks_or_none import once resolved to a wrong package depth)."""
+    from ccslack.handlers.messaging_pipeline.message_routing import handle_new_message
+    from ccslack.session_monitor import NewMessage
+    from ccslack.slack_client import FakeSlackClient
+
+    posted = []
+
+    class _Client(FakeSlackClient):
+        async def chat_postMessage(self, **kw):  # noqa: N802
+            posted.append(kw)
+            return {"ts": "123.0"}
+
+    async def _noop(*a, **k):
+        return []
+
+    monkeypatch.setattr(
+        "ccslack.session_query.find_channels_for_session",
+        lambda sid: [("C1", "@1")],
+    )
+    monkeypatch.setattr(
+        "ccslack.handlers.polling.coordinator.mark_active", lambda *_a, **_k: None
+    )
+    from ccslack.handlers.status import update_status as _us
+
+    monkeypatch.setattr("ccslack.handlers.status.update_status", _us)
+    monkeypatch.setattr(
+        "ccslack.handlers.table_render.maybe_offer_table_render",
+        _noop,
+    )
+
+    msg = NewMessage(
+        session_id="s1",
+        text="intro\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\noutro",
+        is_complete=True,
+        content_type="text",
+        role="assistant",
+        phase="final_answer",
+    )
+    await handle_new_message(msg, _Client())
+
+    assert posted, "no message posted"
+    # The table message must carry a native table block.
+    assert any(
+        any(b.get("type") == "table" for b in (kw.get("blocks") or []))
+        for kw in posted
+    )

@@ -421,7 +421,7 @@ async def _post_or_pair(
     # into section blocks in the same message. Applies to plain agent text;
     # multi-table answers post as a sequence.
     if inline_tables:
-        from ..slack_sender import post_blocks_or_none
+        from ...slack_sender import post_blocks_or_none
 
         first_ts: str | None = None
         native_failed = False
