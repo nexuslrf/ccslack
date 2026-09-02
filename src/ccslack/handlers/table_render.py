@@ -357,7 +357,6 @@ __all__ = [
 _TABLE_MAX_ROWS = 100
 _TABLE_MAX_COLS = 20
 _TABLE_MAX_CHARS = 10_000
-_NUM_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
 # Minimum length for a valid *x* / _x_ italics pair (markers must wrap content).
 _ITALIC_MIN_LEN = 2
 
@@ -386,7 +385,13 @@ def _clean_cell_text(cell_text: str) -> str:
 
 
 def _table_cell(cell_text: str) -> dict:
-    """One table cell: raw_number for numerics, raw_text otherwise.
+    """One table cell as raw_text (numbers included).
+
+    Numeric cells deliberately stay raw_text: Slack's DESKTOP client fails to
+    render ``raw_number`` cells in table blocks (shows empty; mobile renders
+    them fine) — a beta-feature client bug. raw_text renders on every client,
+    and column alignment still comes from ``column_settings``, so right-aligned
+    numeric columns look identical.
 
     Empty cells become a single space — Slack's raw_text schema requires
     ``minLength: 1``, and an empty string makes the whole message
@@ -394,11 +399,7 @@ def _table_cell(cell_text: str) -> dict:
     cells, and ``_parse_table`` pads short rows with "" too).
     """
     stripped = _clean_cell_text(cell_text)
-    if not stripped:
-        return {"type": "raw_text", "text": " "}
-    if _NUM_RE.match(stripped):
-        return {"type": "raw_number", "value": float(stripped), "text": stripped}
-    return {"type": "raw_text", "text": stripped}
+    return {"type": "raw_text", "text": stripped or " "}
 
 
 def markdown_to_table_block(block: str) -> dict | None:

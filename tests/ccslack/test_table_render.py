@@ -135,7 +135,9 @@ def test_markdown_to_table_block_basic():
     assert table is not None
     assert table["type"] == "table"
     assert table["rows"][0][0] == {"type": "raw_text", "text": "Name"}
-    assert table["rows"][1][1] == {"type": "raw_number", "value": 42.0, "text": "42"}
+    # Numeric cells stay raw_text — the Slack desktop client renders
+    # raw_number cells as empty (beta bug); raw_text renders everywhere.
+    assert table["rows"][1][1] == {"type": "raw_text", "text": "42"}
     assert table["column_settings"][1] == {"align": "right"}
 
 
@@ -156,13 +158,13 @@ def test_markdown_to_table_block_aligns():
 
 
 def test_markdown_to_table_block_negative_and_float_numbers():
+    """Numbers stay raw_text (desktop client can't render raw_number cells)."""
     from ccslack.handlers.table_render import markdown_to_table_block
 
     block = "| v |\n|---|\n| -5 |\n| 3.14 |"
     table = markdown_to_table_block(block)
-    assert table["rows"][1][0]["type"] == "raw_number"
-    assert table["rows"][1][0]["value"] == -5.0
-    assert table["rows"][2][0]["value"] == 3.14
+    assert table["rows"][1][0] == {"type": "raw_text", "text": "-5"}
+    assert table["rows"][2][0] == {"type": "raw_text", "text": "3.14"}
 
 
 def test_markdown_to_table_block_text_cells():
