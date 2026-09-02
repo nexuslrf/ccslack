@@ -296,7 +296,15 @@ async def _route_to_channel(
     # offering a separate render post. Falls back to the normal post (and the
     # offer button) for zero/multiple/oversized tables.
     inline_tables = None
-    if msg.role != "user" and msg.content_type == "text":
+    # Tables render natively only for flat main-channel answers. Thread-routed
+    # messages (the workflow thread — thinking already excluded by content
+    # type; codex commentary is "text" but posts into the thread) keep the
+    # plain-text path: threads don't need heavy table processing.
+    if (
+        msg.role != "user"
+        and msg.content_type == "text"
+        and msg.phase != "commentary"
+    ):
         from ..table_render import split_into_table_messages
 
         inline_tables = split_into_table_messages(decorated)
@@ -315,7 +323,12 @@ async def _route_to_channel(
     # Offer to render any markdown table in a plain agent answer as an image
     # (Slack renders tables poorly). The raw text is already posted above; this
     # only adds an opt-in button. User echoes / tool flows are skipped.
-    if msg.role != "user" and msg.content_type == "text" and inline_tables is None:
+    if (
+        msg.role != "user"
+        and msg.content_type == "text"
+        and msg.phase != "commentary"
+        and inline_tables is None
+    ):
         from ..table_render import maybe_offer_table_render
 
         await maybe_offer_table_render(client, channel_id, text)
