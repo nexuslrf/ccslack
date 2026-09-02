@@ -80,7 +80,7 @@ max-statements = 60
 "src/ccslack/screenshot.py" = ["PLR2004", "C901", "PLR0912"]
 "src/ccslack/transcript_parser.py" = ["C901", "PLR0912", "PLR0915", "PLR0911"]
 "src/ccslack/session.py" = ["C901", "PLR0912", "PLR0915"]
-"src/ccslack/session_monitor.py" = ["C901", "PLR0912"]
+"src/ccslack/session_monitor.py" = ["C901", "PLR0912", "PLR0915"]
 "src/ccslack/transcript_reader.py" = ["C901", "PLR0912"]
 # slack_sdk method names use camelCase verbatim — propagate the naming.
 "src/ccslack/slack_client.py" = ["N802"]

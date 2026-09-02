@@ -528,6 +528,15 @@ class SessionMonitor:
                 tracked_path = state.transcript_path if state else ""
                 if not _is_transcript_stale(tracked_path):
                     continue  # tracked session still active — don't hijack
+                # Hook-managed providers (claude, codex): the SessionStart
+                # hook is the authoritative window↔session mapping — the
+                # stale-transcript switch fights it and hijacks EXTERNAL
+                # sessions in the same cwd (e.g. claude launched from an
+                # editor extension) the moment the bound agent pauses
+                # >10s. Skip the switch entirely; /ccslack attach is the
+                # manual recovery path for a genuinely-lost binding.
+                if caps.hook_install_managed_by_ccslack:
+                    continue
                 # Tracked transcript is stale, but only switch if the
                 # discovered session is ACTIVELY being written (fresh mtime)
                 # AND newer than the tracked one. This prevents cycling
