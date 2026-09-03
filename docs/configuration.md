@@ -142,7 +142,7 @@ transcription module is ported.)
 | `AUTOCLOSE_DONE_MINUTES` | `30` | (Reserved — autoclose for done sessions not yet ported.) |
 | `AUTOCLOSE_DEAD_MINUTES` | `10` | (Reserved.) |
 | `CCSLACK_PANE_LIFECYCLE_NOTIFY` | `false` | Default for per-window pane created/closed notifications. |
-| `CCSLACK_LIVE_PICKER` | `on` | Interactive prompt picker. Set to `off` to use the simpler auto-toolbar protocol (toolbar opens after 2 min of agent silence, `@channel` at 10 min, closes on final answer). |
+| `CCSLACK_LIVE_PICKER` | `off` | **Deprecated.** Interactive prompt picker. The auto-toolbar protocol (toolbar opens after 2 min of agent silence, `@channel` at 10 min, closes on final answer) is the default; setting `on` logs a deprecation warning and the flag will be removed in a future release. |
 | `CCSLACK_SHOW_HIDDEN_DIRS` | `false` | Show hidden (dot) dirs in the directory browser (reserved for future modal expansion). |
 
 ### Send command
