@@ -149,42 +149,6 @@ async def test_going_quieter_does_not_flush():
     assert mute_buffer.take("@1") == "should stay buffered"
 
 
-@pytest.mark.asyncio
-async def test_silent_does_not_suppress_interactive_picker(monkeypatch):
-    from ccslack.config import config as _cfg
-
-    monkeypatch.setattr(_cfg, "live_picker", True)
-    _bind("C1", "@1")
-    window_store.set_notification_mode("@1", "silent")
-    entered = {}
-
-    async def _fake_enter(_client, *, channel_id, window_id, tool_use_id, tool_name):
-        entered.update(window_id=window_id, tool_name=tool_name)
-
-    async def _noop_status(*_a, **_k):
-        return None
-
-    monkeypatch.setattr(
-        "ccslack.handlers.interactive.enter_interactive_mode", _fake_enter
-    )
-    monkeypatch.setattr("ccslack.handlers.status.update_status", _noop_status)
-
-    msg = NewMessage(
-        session_id="s1",
-        text="",
-        is_complete=True,
-        content_type="tool_use",
-        tool_use_id="t1",
-        tool_name="AskUserQuestion",
-    )
-    handled = await _pre_post_suppressed(FakeSlackClient(), "C1", "@1", msg, "")
-
-    assert handled is True
-    assert entered == {"window_id": "@1", "tool_name": "AskUserQuestion"}
-    # the picker is not a chatter answer — nothing buffered
-    assert mute_buffer.take("@1") is None
-
-
 def test_mute_buffer_take_is_one_shot():
     mute_buffer.remember("@1", "x")
     assert mute_buffer.take("@1") == "x"

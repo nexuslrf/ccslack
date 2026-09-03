@@ -56,11 +56,6 @@ async def dispatch_hook_event(event: HookEvent, client: SlackClient) -> None:
         await _on_stop(client, channel_id, window_id, event)
     elif event.event_type == "StopFailure":
         await _on_stop(client, channel_id, window_id, event, failed=True)
-    elif event.event_type == "Notification":
-        # Lazy: interactive module pulls tmux capture + Block Kit helpers.
-        from .interactive import handle_notification
-
-        await handle_notification(event, client)
     else:
         logger.debug(
             "Unhandled hook event: type=%s window=%s", event.event_type, window_id
@@ -80,12 +75,9 @@ async def _on_stop(
     Also closes any live interactive picker bound to the window — the agent
     finished the turn, so the prompt is no longer outstanding.
     """
-    # Lazy: status / interactive modules pull session_manager + slack helpers.
-    from .interactive import exit_for_window
+    # Lazy: status / turn-thread modules pull session_manager + slack helpers.
     from .messaging_pipeline.turn_threads import end_turn
     from .status import update_status
-
-    await exit_for_window(client, window_id, reason="agent stop")
 
     # Close the turn's tool-call thread and rewrite its parent into a summary.
     await end_turn(client, channel_id)

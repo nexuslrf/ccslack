@@ -73,25 +73,6 @@ def forget_window(window_id: str) -> None:
     """Drop bookkeeping for a window (called on archive / unbind)."""
     _last_activity.pop(window_id, None)
     _auto_toolbar.pop(window_id, None)
-    # Lazy: prompt_probe state is best-effort; absent module is fine.
-    try:
-        from .prompt_probe import clear_window as _clear_probe
-    except ImportError:
-        pass
-    else:
-        _clear_probe(window_id)
-    # Drop the dismiss cooldown too — channel/window is going away.
-    try:
-        from ..interactive import session_for_window as _session_for_window
-        from .prompt_probe import clear_dismiss as _clear_dismiss
-    except ImportError:
-        pass
-    else:
-        # No direct channel→window reverse here; clear by iterating dismiss map
-        # would need the channel id. Best-effort: skip if we can't get it.
-        session = _session_for_window(window_id)
-        if session is not None:
-            _clear_dismiss(session.channel_id)
     # Marker monitor cleanup.
     try:
         from ..shell_marker import clear_window as _clear_shell
@@ -223,16 +204,6 @@ async def _tick(client: SlackClient, update_status) -> None:  # noqa: ANN001
         # At >10 min, @channel once. Closes on final_answer via end_turn.
         await _check_auto_toolbar(client, channel_id, window_id, now)
 
-        # Probe for interactive prompts every tick — the prompt_probe module
-        # gates internally on hash + interactive-mode + hook-driven providers,
-        # so calling it unconditionally won't spam. We can't wait for
-        # active→idle decay (5 s) because Codex's exec-approval prompt sits on
-        # top of an "active" pane the instant streaming pauses.
-        if config.live_picker:
-            from .prompt_probe import maybe_post_prompt
-
-            await maybe_post_prompt(client, channel_id, window_id)
-
         # Marker-driven shell monitor: for shell-provider windows, passively
         # poll the pane and relay output as it streams. Falls back silently
         # when the marker isn't present (handlers/shell_capture.py picks up
@@ -326,13 +297,6 @@ async def _handle_dead(
     """Window vanished from tmux — flip status + post recovery banner once."""
     if state.status_state == "dead":
         return
-    # Close any live interactive picker bound to the now-dead window so users
-    # don't see a frozen picker that no longer accepts keys.
-    # Lazy: import here to avoid bootstrap cycle.
-    from ..interactive import exit_for_window
-
-    await exit_for_window(client, window_id, reason="window died")
-
     await update_status(client, channel_id, window_id, "dead")
     # Lazy: recovery module exists once task 14 lands.
     try:

@@ -31,6 +31,7 @@ https://man7.org/linux/man-pages/man1/tmux.1.html#KEY_BINDINGS.
 from __future__ import annotations
 
 import asyncio
+import re
 import structlog
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -158,23 +159,29 @@ def _layout_for(provider: str) -> _Layout:
 # --------------------------------------------------------------------- live text
 
 
-async def _capture_pane_snippet(window_id: str) -> str:
-    """Last :data:`_PANE_SNAPSHOT_LINES` of cleaned tmux pane text."""
-    # Lazy: reuse the interactive picker's ANSI-stripping pane reader so the
-    # two live views stay byte-for-byte consistent.
-    from .interactive import _capture_pane_snippet as _full_snippet
+# ANSI escape stripper (moved from the deleted live-picker module).
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 
-    snippet = await _full_snippet(window_id)
-    if not snippet:
+# How many tail lines of the pane the toolbar snapshot shows.
+_SNAPSHOT_LINES = 12
+
+
+async def _capture_pane_snippet(window_id: str) -> str:
+    """Last :data:`_PANE_SNAPSHOT_LINES` of ANSI-stripped tmux pane text."""
+    raw = await tmux_manager.capture_pane_scrollback(
+        window_id, history=200, with_ansi=True
+    )
+    if not raw:
         return ""
-    lines = snippet.splitlines()
+    cleaned = _ANSI_RE.sub("", raw).rstrip()
+    lines = cleaned.splitlines()
     return "\n".join(lines[-_PANE_SNAPSHOT_LINES:]) if lines else ""
 
 
 def _hash_pane(text: str) -> str:
-    from .interactive import _hash_pane as _h
+    import hashlib
 
-    return _h(text)
+    return hashlib.sha1(text.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
 
 @dataclass

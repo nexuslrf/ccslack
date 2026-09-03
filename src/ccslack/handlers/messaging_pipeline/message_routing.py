@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 import structlog.contextvars
 
 from ... import session_query, window_query
-from ...config import config
 from ...session_monitor import NewMessage
 from ...slack_sender import MAX_POST_CHARS, safe_post, safe_send_long, safe_update
 
@@ -81,9 +80,8 @@ async def handle_new_message(msg: NewMessage, client: SlackClient) -> None:
         result into the call message (see ``_post_or_pair``); ``calls`` drops the
         result; ``hidden`` drops both.
       * short "thinking" snippets (< 20 chars) are dropped globally.
-      * interactive ``tool_use`` (AskUserQuestion / ExitPlanMode /
-        request_user_input) skip the normal post and drive the live picker
-        instead — see ``handlers.interactive``.
+      * a "stuck" agent (no output for 2 min after a prompt) is handled by
+        the auto-toolbar hang-detector — see ``handlers.toolbar``.
       * everything else is posted with Block Kit + plain-text fallback.
     """
 
@@ -127,41 +125,9 @@ async def _pre_post_suppressed(
       * per-window **tool-call visibility** (``/ccslack toolcalls``).
       * **notification mode** (``/ccslack mute`` — all/errors_only/muted).
     """
-    # Lazy: interactive pulls picker machinery; keep it off the hot import path.
-    from ..interactive import (
-        INTERACTIVE_TOOL_NAMES,
-        enter_interactive_mode,
-        maybe_exit_for_tool_result,
-    )
     from ..status import update_status
 
     notification_mode = window_query.get_notification_mode(window_id)
-
-    # Interactive prompts fire BEFORE any mute gate: the picker is how the agent
-    # gets unblocked, so suppressing it (even in `silent`) would deadlock the
-    # session — nothing would ever "resume" no matter the notify mode.
-    if (
-        msg.content_type == "tool_use"
-        and (msg.tool_name or "") in INTERACTIVE_TOOL_NAMES
-        and config.live_picker
-    ):
-        await enter_interactive_mode(
-            client,
-            channel_id=channel_id,
-            window_id=window_id,
-            tool_use_id=msg.tool_use_id,
-            tool_name=msg.tool_name or "",
-        )
-        await update_status(client, channel_id, window_id, "active")
-        return True
-
-    if (
-        msg.content_type == "tool_result"
-        and msg.tool_use_id
-        and await maybe_exit_for_tool_result(client, msg.tool_use_id)
-    ):
-        await update_status(client, channel_id, window_id, "active")
-        return True
 
     # Codex commentary (pre-tool-call narration, phase="commentary") can be
     # hidden per channel so only final answers + tool flows post.
@@ -312,13 +278,6 @@ async def _route_to_channel(
         client, channel_id, msg, decorated, thread_ts=thread_ts,
         inline_tables=inline_tables,
     )
-
-    # Any agent output posted below an open live picker buries it in scrollback.
-    # Flag it so the picker's refresh loop bumps a fresh copy to the bottom,
-    # keeping the active prompt as the newest message.
-    from ..interactive import note_channel_post
-
-    note_channel_post(channel_id)
 
     # Offer to render any markdown table in a plain agent answer as an image
     # (Slack renders tables poorly). The raw text is already posted above; this

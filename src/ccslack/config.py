@@ -397,20 +397,6 @@ class Config:
         self.pane_lifecycle_notify: bool = os.getenv(
             "CCSLACK_PANE_LIFECYCLE_NOTIFY", ""
         ).lower() in ("1", "true", "yes")
-        # Live picker (interactive prompt mirror) — DEPRECATED. Defaults to
-        # off: the auto-toolbar hang-detector (timeout → toolbar → @channel at
-        # 10 min → close on final answer) replaced it as the single "agent is
-        # stuck" UX. Explicitly enabling logs a deprecation warning.
-        _live_picker_raw = os.getenv("CCSLACK_LIVE_PICKER", "off").strip().lower()
-        self.live_picker = _live_picker_raw in ("1", "true", "yes", "on")
-        if self.live_picker:
-            import structlog as _structlog
-
-            _structlog.get_logger().warning(
-                "CCSLACK_LIVE_PICKER is deprecated — the auto-toolbar "
-                "(hang-detector) is the default. The flag will be removed "
-                "in a future release."
-            )
 
     def is_user_allowed(self, user_id: str) -> bool:
         """Check if a Slack user ID is in the allowed list."""

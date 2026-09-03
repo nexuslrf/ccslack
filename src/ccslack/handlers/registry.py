@@ -32,7 +32,6 @@ def register_all(app: AsyncApp) -> None:
         "status",
         "screenshot",
         "toolbar",
-        "interactive",
         "new_modal",
         "resume",
         "send",
