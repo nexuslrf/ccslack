@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import structlog
 import time
 from typing import TYPE_CHECKING
@@ -48,15 +49,34 @@ _last_activity: dict[str, float] = {}
 
 
 def mark_active(window_id: str) -> None:
-    """Bookkeeping: called by message_routing when fresh content arrives."""
-    _last_activity[window_id] = time.monotonic()
-    # Fresh output = the agent is working. Reset the auto-toolbar hang state
-    # but keep the toolbar open if it's already open (the user may be
-    # driving a picker). The toolbar closes on final_answer via end_turn.
+    """Bookkeeping: called by message_routing when fresh content arrives.
+
+    Fresh output means the agent is mid-turn — CREATE the hang clock if
+    absent (covers prompts typed in the terminal, not just Slack-forwarded
+    ones) and reset it. The clock clears on final_answer via end_turn; if
+    output stops for _HANGING_THRESHOLD_SECS, the toolbar auto-opens.
+    """
+    now = time.monotonic()
+    _last_activity[window_id] = now
     entry = _auto_toolbar.get(window_id)
-    if entry is not None:
-        _prompt_sent, _opened, _notified = entry
-        _auto_toolbar[window_id] = (_prompt_sent, _opened, False)
+    if entry is None:
+        _auto_toolbar[window_id] = (now, False, False)
+    else:
+        _clock, opened, _notified = entry
+        _auto_toolbar[window_id] = (now, opened, False)
+
+
+def mark_agent_stuck(window_id: str) -> None:
+    """Seed the hang clock from an explicit "agent needs input" signal.
+
+    Called on Notification hook events (claude/pi fire them when waiting
+    for permission/approval) — the agent is definitively stuck, so start
+    (or refresh) the auto-toolbar clock. The toolbar opens per the normal
+    hang threshold.
+    """
+    entry = _auto_toolbar.get(window_id)
+    opened = entry[1] if entry is not None else False
+    _auto_toolbar[window_id] = (time.monotonic(), opened, False)
 
 
 def mark_prompt_sent(window_id: str) -> None:
@@ -152,11 +172,53 @@ async def stop_status_polling() -> None:
     logger.info("Status polling stopped")
 
 
+# Approval/wait chrome in an agent TUI pane — a one-shot at startup, NOT a
+# continuous probe. Matching any of these means the agent was stuck on an
+# approval when the bot (re)started, so its in-memory hang clock was lost.
+_STUCK_PANE_RE = re.compile(
+    r"Do you want to allow|requires confirmation|Do you want to make this edit"
+    r"|Permission rule|press enter to confirm|1\. Yes",
+    re.IGNORECASE,
+)
+
+
+async def _startup_stuck_sweep(_client: SlackClient) -> None:
+    """Seed hang clocks for windows stuck before the bot started.
+
+    The auto-toolbar state is in-memory; a bot restart mid-hang loses it and
+    the stuck agent produces no new output to re-seed it via mark_active.
+    One sweep at startup: for each bound window, check the pane for
+    approval/wait chrome and seed the clock if found.
+    """
+    seeded = 0
+    for channel_id, window_id in list(thread_router.channel_bindings.items()):
+        try:
+            window = await tmux_manager.find_window_by_id(window_id)
+        except (OSError, RuntimeError):
+            continue
+        if window is None:
+            continue
+        pane = await tmux_manager.capture_pane(window_id)
+        if pane and _STUCK_PANE_RE.search(pane):
+            mark_agent_stuck(window_id)
+            seeded += 1
+            logger.info(
+                "Startup sweep: window %s appears stuck on an approval — "
+                "hang clock seeded (toolbar will open in ~%ds)",
+                window_id,
+                int(_HANGING_THRESHOLD_SECS),
+            )
+    if seeded:
+        logger.info("Startup stuck sweep seeded %d window(s)", seeded)
+
+
 async def _poll_loop(client: SlackClient) -> None:
     """The polling body — never returns until cancelled."""
     # Lazy: handler modules pull session_manager + slack helpers; defer to
     # keep the polling import path lean for tests.
     from ..status import update_status
+
+    await _startup_stuck_sweep(client)
 
     interval = max(0.5, config.status_poll_interval)
     last_sweep = 0.0
@@ -313,6 +375,7 @@ __all__ = [
     "forget_window",
     "is_channel_gone",
     "mark_active",
+    "mark_agent_stuck",
     "mark_prompt_sent",
     "prune_channel",
     "start_status_polling",

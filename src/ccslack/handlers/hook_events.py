@@ -56,6 +56,13 @@ async def dispatch_hook_event(event: HookEvent, client: SlackClient) -> None:
         await _on_stop(client, channel_id, window_id, event)
     elif event.event_type == "StopFailure":
         await _on_stop(client, channel_id, window_id, event, failed=True)
+    elif event.event_type == "Notification":
+        # The agent is explicitly waiting for human input (permission,
+        # approval, question). Seed the auto-toolbar hang clock — the
+        # toolbar pops after the hang threshold if the wait persists.
+        from .polling.coordinator import mark_agent_stuck
+
+        mark_agent_stuck(window_id)
     else:
         logger.debug(
             "Unhandled hook event: type=%s window=%s", event.event_type, window_id
