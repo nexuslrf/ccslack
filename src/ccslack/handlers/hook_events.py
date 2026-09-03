@@ -57,12 +57,28 @@ async def dispatch_hook_event(event: HookEvent, client: SlackClient) -> None:
     elif event.event_type == "StopFailure":
         await _on_stop(client, channel_id, window_id, event, failed=True)
     elif event.event_type == "Notification":
-        # The agent is explicitly waiting for human input (permission,
-        # approval, question). Seed the auto-toolbar hang clock — the
-        # toolbar pops after the hang threshold if the wait persists.
+        # A Notification hook means the agent wants human input — but only
+        # permission/approval notifications indicate a BLOCKED agent.
+        # Claude also fires "Claude is waiting for your input" when the
+        # session sits idle AFTER a finished turn — seeding the hang clock
+        # for that is a false alarm (the turn already ended via end_turn).
+        import re as _re
+
         from .polling.coordinator import mark_agent_stuck
 
-        mark_agent_stuck(window_id)
+        _blocked_notification_re = _re.compile(
+            r"permission|approve|allow|confirm|wants to|needs your",
+            _re.IGNORECASE,
+        )
+        message = str((event.data or {}).get("message", ""))
+        if _blocked_notification_re.search(message):
+            mark_agent_stuck(window_id)
+        else:
+            logger.debug(
+                "Idle notification (not a hang) for window %s: %r",
+                window_id,
+                message[:60],
+            )
     else:
         logger.debug(
             "Unhandled hook event: type=%s window=%s", event.event_type, window_id

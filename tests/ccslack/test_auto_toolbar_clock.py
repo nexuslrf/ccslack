@@ -63,3 +63,53 @@ def test_stuck_pane_regex_matches_approval_chrome():
 def test_stuck_pane_regex_ignores_normal_output():
     assert not coord._STUCK_PANE_RE.search("Ran 42 tests, all passed in 3.2s")
     assert not coord._STUCK_PANE_RE.search("Here is the summary of the changes")
+
+
+def test_notification_filter_blocks_idle_reminder():
+    """Claude's idle reminder must NOT re-seed the hang clock after end_turn."""
+    import asyncio
+
+    from ccslack.handlers.hook_events import dispatch_hook_event
+
+    class _Evt:
+        event_type = "Notification"
+        window_key = "ccslack:@3"
+        session_id = "s"
+        data = {"message": "Claude is waiting for your input"}
+        timestamp = 0.0
+
+    class _Client:
+        async def chat_postMessage(self, **kw):  # noqa: N802
+            return {"ts": "1"}
+
+    import ccslack.thread_router as tr
+    tr.thread_router.bind_channel("C3", "@3", window_name="t")
+    coord._auto_toolbar.pop("@3", None)
+
+    asyncio.run(dispatch_hook_event(_Evt(), _Client()))
+    assert "@3" not in coord._auto_toolbar  # idle reminder → no seed
+
+
+def test_notification_filter_seeds_permission():
+    """A permission notification seeds the hang clock."""
+    import asyncio
+
+    from ccslack.handlers.hook_events import dispatch_hook_event
+
+    class _Evt:
+        event_type = "Notification"
+        window_key = "ccslack:@4"
+        session_id = "s"
+        data = {"message": "Claude needs your permission to use WebFetch"}
+        timestamp = 0.0
+
+    class _Client:
+        async def chat_postMessage(self, **kw):  # noqa: N802
+            return {"ts": "1"}
+
+    import ccslack.thread_router as tr
+    tr.thread_router.bind_channel("C4", "@4", window_name="t")
+    coord._auto_toolbar.pop("@4", None)
+
+    asyncio.run(dispatch_hook_event(_Evt(), _Client()))
+    assert "@4" in coord._auto_toolbar  # permission → seeded
