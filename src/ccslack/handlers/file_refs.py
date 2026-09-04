@@ -109,9 +109,19 @@ def _candidates(text: str) -> list[str]:
     return out
 
 
-def _resolve(tok: str, cwd: Path) -> Path:
-    """Resolve a token to an absolute path (relative tokens rooted at cwd)."""
-    p = Path(tok).expanduser()
+def _resolve(tok: str, cwd: Path) -> Path | None:
+    """Resolve a token to an absolute path (relative tokens rooted at cwd).
+
+    Returns None when the token can't be resolved — notably
+    ``Path.expanduser`` raises ``RuntimeError: Could not determine home
+    directory`` for ``~``-tokens when HOME isn't resolvable in the process
+    environment (seen in the systemd service), which used to crash the whole
+    message callback.
+    """
+    try:
+        p = Path(tok).expanduser()
+    except (RuntimeError, OSError):
+        return None
     return p if p.is_absolute() else cwd / p
 
 
@@ -126,6 +136,8 @@ def find_file_refs(text: str, cwd: Path) -> list[Path]:
     seen_abs: set[str] = set()
     for tok in _candidates(text):
         path = _resolve(tok, cwd)
+        if path is None:
+            continue
         # Cheap gate first: must be an in-cwd, non-hidden regular file.
         try:
             if (

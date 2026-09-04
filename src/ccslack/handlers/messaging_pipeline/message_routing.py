@@ -89,12 +89,22 @@ async def handle_new_message(msg: NewMessage, client: SlackClient) -> None:
     if not text.strip():
         return
 
-    if msg.content_type == "thinking" and len(text.strip()) < _MIN_THINKING_LENGTH:
-        return
-
     channels = session_query.find_channels_for_session(msg.session_id)
     if not channels:
         logger.debug("No Slack channels bound to session %s", msg.session_id)
+        return
+
+    # Any agent message = the agent is working — reset the auto-toolbar hang
+    # clock BEFORE any posting filter (short thinking is dropped from
+    # posting but is still activity; "hang" means a quiet stretch with NO
+    # message events at all). Every bound window's clock resets.
+    if msg.role != "user":
+        from ..polling.coordinator import mark_active
+
+        for _channel_id, window_id in channels:
+            mark_active(window_id)
+
+    if msg.content_type == "thinking" and len(text.strip()) < _MIN_THINKING_LENGTH:
         return
 
     for channel_id, window_id in channels:
@@ -186,6 +196,26 @@ def _buffer_suppressed_answer(window_id: str, msg: NewMessage, text: str) -> Non
         mute_buffer.remember(window_id, text)
 
 
+async def _safe_offer(
+    offer_fn,  # noqa: ANN001
+    label: str,
+    client: SlackClient,
+    channel_id: str,
+    text: str,
+) -> None:
+    """Run an optional offer (table render / file refs) defensively.
+
+    These are cosmetic niceties — a failure inside one must never kill the
+    message routing (historically it did: an expanduser RuntimeError in the
+    file-refs offer aborted the callback BEFORE end_turn ran, leaving the
+    auto-toolbar hang clock alive → false-alarm toolbar + @channel).
+    """
+    try:
+        await offer_fn(client, channel_id, text)
+    except Exception:  # noqa: BLE001 — cosmetic path; log-and-continue
+        logger.warning("Optional %s offer failed for %s", label, channel_id)
+
+
 async def _route_to_channel(
     client: SlackClient,
     channel_id: str,
@@ -194,16 +224,10 @@ async def _route_to_channel(
     text: str,
 ) -> None:
     """Deliver one message to one bound channel, applying all routing policy."""
-    # Lazy: status / polling modules pull session_manager + slack helpers.
-    from ..polling.coordinator import mark_active
+    # Lazy: status module pulls session_manager + slack helpers.
     from ..status import update_status
     from . import turn_threads
 
-    # Reset the auto-toolbar hang timer only on agent text output — not on
-    # tool_use/tool_result (internal workflow; the agent may pause between
-    # them waiting for approval without visible output).
-    if msg.role != "user" and msg.content_type in ("text", "thinking"):
-        mark_active(window_id)
 
     # A fresh user message closes the previous turn's tool thread (if any)
     # so the new exchange starts with a clean parent.
@@ -290,14 +314,14 @@ async def _route_to_channel(
     ):
         from ..table_render import maybe_offer_table_render
 
-        await maybe_offer_table_render(client, channel_id, text)
+        await _safe_offer(maybe_offer_table_render, "table render", client, channel_id, text)
 
     # Offer a "Show files" button when a final answer names real project files.
     # Skip pre-tool-call narration (commentary) — only the answer is scanned.
     if msg.role != "user" and msg.content_type == "text" and msg.phase != "commentary":
         from ..file_refs import maybe_offer_file_refs
 
-        await maybe_offer_file_refs(client, channel_id, text)
+        await _safe_offer(maybe_offer_file_refs, "file refs", client, channel_id, text)
 
     # No-hooks turn-end signal: the agent's final answer closes the thread.
     # The Stop hook also calls end_turn (idempotent), so this is just a
@@ -415,7 +439,9 @@ async def _post_or_pair(
             # image render if Slack rejects again.
             from ..table_render import maybe_offer_table_render
 
-            await maybe_offer_table_render(client, channel_id, decorated)
+            await _safe_offer(
+                maybe_offer_table_render, "table render", client, channel_id, decorated
+            )
         return first_ts
 
     if msg.content_type == "tool_use" and msg.tool_use_id:
