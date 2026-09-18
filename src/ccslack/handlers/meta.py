@@ -2235,11 +2235,11 @@ async def _kill_one(
             "— channel left unbound (use `/ccslack here <dir> [provider]` to rebind)"
         )
 
-    try:
-        await bolt_client.conversations_archive(channel=channel_id)
-    except SlackApiError as exc:
-        error = exc.response.get("error") if exc.response else str(exc)
-        return f":warning: <#{channel_id}> ({display}) — archive failed: `{error}`"
+    # Lazy: shared archive helper renames the channel to archive-<name> first.
+    from ..slack_sender import safe_archive_renamed
+
+    if not await safe_archive_renamed(bolt_client, channel=channel_id):
+        return f":warning: <#{channel_id}> ({display}) — archive failed"
 
     return f":wastebasket: killed <#{channel_id}> ({display}, `{window_id}`) — archived"
 

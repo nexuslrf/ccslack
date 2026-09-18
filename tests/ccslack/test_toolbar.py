@@ -39,7 +39,7 @@ async def test_open_toolbar_posts_live_text_and_starts_refresh(monkeypatch):
 
     panes = iter(["first pane", "first pane", "second pane"])
 
-    async def fake_snippet(window_id):  # noqa: ARG001
+    async def fake_snippet(window_id, lines=12):  # noqa: ARG001
         return next(panes, "second pane")
 
     async def fake_find(window_id):  # noqa: ARG001
@@ -75,7 +75,7 @@ async def test_open_toolbar_posts_live_text_and_starts_refresh(monkeypatch):
 async def test_refresh_loop_stops_when_window_dies(monkeypatch):
     session_manager.set_window_provider("@33", "claude", cwd="/tmp")
 
-    async def fake_snippet(window_id):  # noqa: ARG001
+    async def fake_snippet(window_id, lines=12):  # noqa: ARG001
         return "pane"
 
     async def dead_window(window_id):  # noqa: ARG001
@@ -94,3 +94,29 @@ async def test_refresh_loop_stops_when_window_dies(monkeypatch):
         if ts not in toolbar._active_toolbars:
             break
     assert ts not in toolbar._active_toolbars
+
+
+def test_toolbar_blocks_include_expand_button():
+    blocks, _ = toolbar.build_toolbar_blocks("@32", "pane text")
+    util_rows = [
+        b for b in blocks
+        if b["type"] == "actions"
+        and any(e.get("action_id") == "ccslack_toolbar_expand" for e in b["elements"])
+    ]
+    assert len(util_rows) == 1
+    # The expand button sits with Close in the same utility row.
+    assert any(
+        e.get("action_id") == "ccslack_toolbar_close" for e in util_rows[0]["elements"]
+    )
+
+
+def test_toolbar_snippet_clipped_to_lines():
+    pane = "\n".join(f"line{i}" for i in range(30))
+    blocks, _ = toolbar.build_toolbar_blocks("@32", pane, lines=20)
+    code = [
+        b for b in blocks
+        if b["type"] == "section" and "```" in b["text"]["text"]
+    ][0]["text"]["text"]
+    assert "line29" in code
+    assert "line9" not in code  # only the last 20 lines
+    assert "line10" in code

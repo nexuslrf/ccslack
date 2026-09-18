@@ -337,9 +337,11 @@ def register(app) -> None:  # noqa: ANN001
         from .purge import forget_channel as _purge_forget
         _purge_forget(channel_id)
 
-        # Best-effort: archive the channel.
+        # Best-effort: rename to archive-<name> first, then archive.
         try:
-            await client.conversations_archive(channel=channel_id)
+            from ..slack_sender import safe_archive_renamed
+
+            await safe_archive_renamed(client, channel=channel_id)
         except SlackApiError as exc:
             logger.debug(
                 "conversations.archive failed: %s",

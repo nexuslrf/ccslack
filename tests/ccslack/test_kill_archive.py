@@ -85,3 +85,67 @@ async def test_handle_kill_strips_archive_flag(monkeypatch):
     # Should have archived exactly once (the flag was consumed, not treated
     # as part of the target).
     assert client.call_count("conversations_archive") == 1
+
+
+def test_safe_archive_renamed_prefixes_channel(monkeypatch):
+    """safe_archive_renamed renames to archive-<name> before archiving."""
+    from ccslack.slack_client import FakeSlackClient
+    from ccslack.slack_sender import safe_archive_renamed
+
+    client = FakeSlackClient()
+    client.returns["conversations_info"] = {
+        "ok": True,
+        "channel": {"id": "C1", "name": "my-session"},
+    }
+
+    import asyncio
+
+    ok = asyncio.run(safe_archive_renamed(client, channel="C1"))
+    assert ok is True
+    rename = client.last_call("conversations_rename")
+    assert rename.kwargs["name"] == "archive-my-session"
+    assert client.call_count("conversations_archive") == 1
+    # rename happens before archive
+    calls = [c.method for c in client.calls]
+    assert calls.index("conversations_rename") < calls.index("conversations_archive")
+
+
+def test_safe_archive_renamed_skips_double_prefix():
+    from ccslack.slack_client import FakeSlackClient
+    from ccslack.slack_sender import safe_archive_renamed
+
+    client = FakeSlackClient()
+    client.returns["conversations_info"] = {
+        "ok": True,
+        "channel": {"id": "C1", "name": "archive-my-session"},
+    }
+
+    import asyncio
+
+    asyncio.run(safe_archive_renamed(client, channel="C1"))
+    assert client.call_count("conversations_rename") == 0  # already prefixed
+    assert client.call_count("conversations_archive") == 1
+
+
+def test_safe_archive_renamed_rename_failure_still_archives():
+    from slack_sdk.errors import SlackApiError
+
+    from ccslack.slack_client import FakeSlackClient
+    from ccslack.slack_sender import safe_archive_renamed
+
+    client = FakeSlackClient()
+    client.returns["conversations_info"] = {
+        "ok": True,
+        "channel": {"id": "C1", "name": "my-session"},
+    }
+
+    def _make_err(msg):
+        resp = type("R", (), {"get": lambda self, k: msg})()
+        return SlackApiError(msg, resp)
+
+    client.set_side_effect("conversations_rename", [_make_err("invalid_name")])
+
+    import asyncio
+
+    ok = asyncio.run(safe_archive_renamed(client, channel="C1"))
+    assert ok is True  # archive succeeded despite the rename failure

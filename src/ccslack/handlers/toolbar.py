@@ -53,7 +53,6 @@ logger = structlog.get_logger()
 # Live-text refresh tunables. The toolbar shows the tail of the tmux pane and
 # re-edits the message whenever the pane content changes, until it is closed.
 REFRESH_INTERVAL = 1.0  # seconds between pane re-captures
-_PANE_SNAPSHOT_LINES = 12  # tail lines shown above the buttons
 
 
 # (display, tmux_key) — display goes on the button, tmux_key into send-keys.
@@ -162,20 +161,24 @@ def _layout_for(provider: str) -> _Layout:
 # ANSI escape stripper (moved from the deleted live-picker module).
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 
-# How many tail lines of the pane the toolbar snapshot shows.
+# How many tail lines of the pane the toolbar snapshot shows initially, and
+# how many the "+10 lines" button adds per click.
 _SNAPSHOT_LINES = 12
+_EXPAND_STEP_LINES = 10
 
 
-async def _capture_pane_snippet(window_id: str) -> str:
-    """Last :data:`_PANE_SNAPSHOT_LINES` of ANSI-stripped tmux pane text."""
+async def _capture_pane_snippet(
+    window_id: str, lines: int = _SNAPSHOT_LINES
+) -> str:
+    """Last *lines* of ANSI-stripped tmux pane text."""
     raw = await tmux_manager.capture_pane_scrollback(
         window_id, history=200, with_ansi=True
     )
     if not raw:
         return ""
     cleaned = _ANSI_RE.sub("", raw).rstrip()
-    lines = cleaned.splitlines()
-    return "\n".join(lines[-_PANE_SNAPSHOT_LINES:]) if lines else ""
+    pane_lines = cleaned.splitlines()
+    return "\n".join(pane_lines[-lines:]) if pane_lines else ""
 
 
 def _hash_pane(text: str) -> str:
@@ -192,6 +195,9 @@ class _ToolbarSession:
     window_id: str
     message_ts: str
     last_pane_hash: str = ""
+    # Current snippet height — the "+10 lines" button grows this per open;
+    # a NEW toolbar always starts at _SNAPSHOT_LINES.
+    snippet_lines: int = _SNAPSHOT_LINES
     refresh_task: asyncio.Task[None] | None = field(default=None, repr=False)
 
 
@@ -200,7 +206,7 @@ _active_toolbars: dict[str, _ToolbarSession] = {}
 
 
 def build_toolbar_blocks(
-    window_id: str, pane: str | None = None
+    window_id: str, pane: str | None = None, lines: int = _SNAPSHOT_LINES
 ) -> tuple[list[dict[str, Any]], str]:
     """Build the toolbar's Block Kit blocks for a window. Returns (blocks, fallback).
 
@@ -227,7 +233,10 @@ def build_toolbar_blocks(
         }
     ]
     if pane and pane.strip():
-        snippet = pane.strip()[:2900]
+        # Clip to the caller's snippet height defensively (the pane may
+        # have been captured at a different height than *lines*).
+        pane_lines = pane.strip().splitlines()
+        snippet = "\n".join(pane_lines[-lines:])[:2900]
         blocks.append(
             {
                 "type": "section",
@@ -249,18 +258,28 @@ def build_toolbar_blocks(
                 ],
             }
         )
-    # Close row (separate so it isn't crammed with key buttons).
+    # Utility row: "+10 lines" grows the pane snippet for THIS toolbar
+    # (per-open state — a fresh toolbar starts at the original height) + Close.
     blocks.append(
         {
             "type": "actions",
             "elements": [
                 {
                     "type": "button",
+                    "action_id": "ccslack_toolbar_expand",
+                    "text": {
+                        "type": "plain_text",
+                        "text": f":mag_right: +{_EXPAND_STEP_LINES} lines",
+                    },
+                    "value": window_id,
+                },
+                {
+                    "type": "button",
                     "action_id": "ccslack_toolbar_close",
                     "style": "danger",
                     "text": {"type": "plain_text", "text": ":x: Close"},
                     "value": window_id,
-                }
+                },
             ],
         }
     )
@@ -324,12 +343,14 @@ async def _refresh_loop(client: SlackClient, ts: str) -> None:
             _active_toolbars.pop(ts, None)
             return
 
-        pane = await _capture_pane_snippet(session.window_id)
+        pane = await _capture_pane_snippet(session.window_id, session.snippet_lines)
         digest = _hash_pane(pane)
         if digest == session.last_pane_hash:
             continue
         session.last_pane_hash = digest
-        blocks, fallback = build_toolbar_blocks(session.window_id, pane)
+        blocks, fallback = build_toolbar_blocks(
+            session.window_id, pane, session.snippet_lines
+        )
         try:
             await client.chat_update(
                 channel=session.channel_id, ts=ts, text=fallback, blocks=blocks
@@ -374,6 +395,38 @@ def register(app: AsyncApp) -> None:
         if not window_id:
             return
         await open_toolbar(client, channel_id, window_id)
+
+    @app.action("ccslack_toolbar_expand")
+    async def on_expand(ack, body, client) -> None:  # noqa: ANN001
+        """Grow this toolbar's pane snippet by +10 lines (chat.update in place).
+
+        Per-open state only — the next toolbar starts at the original height.
+        """
+        await ack()
+        user_id = body.get("user", {}).get("id", "")
+        channel_id = body.get("channel", {}).get("id", "")
+        from .auth import is_authorized
+
+        if not is_authorized(user_id, channel_id):
+            return
+        message_ts = (body.get("message") or {}).get("ts", "")
+        session = _active_toolbars.get(message_ts)
+        if session is None:
+            return
+        session.snippet_lines += _EXPAND_STEP_LINES
+        pane = await _capture_pane_snippet(session.window_id, session.snippet_lines)
+        blocks, fallback = build_toolbar_blocks(
+            session.window_id, pane, session.snippet_lines
+        )
+        try:
+            await client.chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text=fallback,
+                blocks=blocks,
+            )
+        except SlackApiError:
+            logger.warning("toolbar expand: chat.update failed for %s", message_ts)
 
     @app.action("ccslack_toolbar_close")
     async def on_close(ack, body, client) -> None:  # noqa: ANN001

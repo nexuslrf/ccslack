@@ -217,6 +217,51 @@ async def post_blocks_or_none(
         return None
 
 
+# Longest a Slack channel name may be.
+_SLACK_NAME_LIMIT = 80
+
+
+async def safe_archive_renamed(
+    client,  # noqa: ANN001 — any client with conversations_info/rename/archive
+    *,
+    channel: str,
+    prefix: str = "archive-",
+) -> bool:
+    """Best-effort rename the channel to ``<prefix><name>`` then archive it.
+
+    Renaming first makes archived channels distinguishable in Slack's channel
+    switcher / search (``archive-foo`` vs ``foo``). A failed rename never
+    blocks the archive. Returns True when the archive succeeded.
+    """
+    try:
+        info = await client.conversations_info(channel=channel)
+        ch = info.get("channel") if hasattr(info, "get") else info["channel"]
+        name = (ch or {}).get("name", "") if isinstance(ch, dict) else ""
+        if name and not name.startswith(prefix):
+            try:
+                await client.conversations_rename(
+                    channel=channel, name=f"{prefix}{name}"[:_SLACK_NAME_LIMIT]
+                )
+            except SlackApiError as exc:
+                logger.debug(
+                    "pre-archive rename failed for %s: %s",
+                    channel,
+                    exc.response.get("error") if exc.response else exc,
+                )
+    except SlackApiError:
+        logger.debug("conversations.info failed for %s; archiving as-is", channel)
+    try:
+        await client.conversations_archive(channel=channel)
+        return True
+    except SlackApiError as exc:
+        logger.debug(
+            "conversations.archive failed for %s: %s",
+            channel,
+            exc.response.get("error") if exc.response else exc,
+        )
+    return False
+
+
 async def safe_update(
     client: SlackClient,
     *,

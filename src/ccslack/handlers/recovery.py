@@ -625,8 +625,11 @@ async def _archive(
     if message_ts:
         with contextlib.suppress(SlackApiError):
             await client.chat_delete(channel=channel_id, ts=message_ts)
+    # Lazy: shared archive helper renames the channel to archive-<name> first.
+    from ..slack_sender import safe_archive_renamed
+
     with contextlib.suppress(SlackApiError):
-        await client.conversations_archive(channel=channel_id)
+        await safe_archive_renamed(client, channel=channel_id)
 
 
 def _extract_window_id(body: dict[str, Any], action_id: str) -> str:
