@@ -525,7 +525,8 @@ def _help_text() -> str:
         "opens a picker modal.\n"
         f"• `{slash} adduser @user` / `removeuser @user` / `users` — manage "
         "who may drive this session (public mode; `ALLOWED_USERS` only).\n"
-        f"• `{slash} purge [N|all|since <dur>]` — delete ccslack's own output "
+        f"• `{slash} purge [N|all|since <dur>|before <dur>]` — delete ccslack's own "
+        "output "
         "in this channel (not your messages or chat threads).\n"
         f"• `{slash} autopurge [off|Xh]` — auto-delete output older than X "
         "hours (default off).\n"
@@ -2001,7 +2002,7 @@ async def _handle_purge(
             user=user_id,
             text=(
                 f"ccslack: usage `{config.slash_command} purge "
-                "[N | all | since <dur>]`."
+                "[N | all | since <dur> | before <dur>]`."
             ),
         )
         return

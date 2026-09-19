@@ -297,3 +297,31 @@ async def test_handle_autopurge_reports_state():
 
     eph = client.last_call("chat_postEphemeral")
     assert "every 3h" in eph.kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_purge_before_deletes_old_keeps_recent():
+    """purge before <dur> deletes messages OLDER than the window, keeps the tail."""
+    client = FakeSlackClient()
+    now = time.time()
+    # Two entries: one 3h old, one 5m old.
+    purge.record("C1", str(now - 3 * 3600), kind="answer")
+    purge.record("C1", str(now - 5 * 60), kind="answer")
+
+    deleted = await purge.purge(client, "C1", before_seconds=2 * 3600)
+    assert deleted == 1  # only the 3h-old entry
+    remaining = purge._ledger["C1"]
+    assert len(remaining) == 1
+    assert float(remaining[0]["ts"]) > now - 3600  # the recent one survived
+
+
+@pytest.mark.asyncio
+async def test_purge_before_zero_window_deletes_everything():
+    """purge before 0m deletes everything — every recorded entry is in the past."""
+    client = FakeSlackClient()
+    now = time.time()
+    purge.record("C1", str(now - 60), kind="answer")
+
+    deleted = await purge.purge(client, "C1", before_seconds=0.0)
+    assert deleted == 1  # everything is older than "now"
+    assert "C1" not in purge._ledger  # channel key popped when empty

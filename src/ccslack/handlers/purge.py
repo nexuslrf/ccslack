@@ -255,17 +255,24 @@ async def purge(
     *,
     count: int | None = None,
     since_seconds: float | None = None,
+    before_seconds: float | None = None,
 ) -> int:
     """Delete recorded output in *channel_id*.
 
     ``count`` — the most recent N. ``since_seconds`` — posted within the last
-    window. Neither — everything recorded. Returns the number deleted.
+    window. ``before_seconds`` — posted *longer* ago than the window (the
+    opposite of ``since``; keeps the recent tail). Neither — everything
+    recorded. Returns the number deleted.
     """
     _ensure_loaded()
     entries = list(_ledger.get(channel_id, []))
     if since_seconds is not None:
         cutoff = time.time() - since_seconds
         selected = [e for e in entries if _ts_age_ok(e["ts"], cutoff)]
+    elif before_seconds is not None:
+        cutoff = time.time() - before_seconds
+        # Opposite of since: keep entries NEWER than the cutoff, delete older.
+        selected = [e for e in entries if not _ts_age_ok(e["ts"], cutoff)]
     elif count is not None:
         selected = entries[-count:]
     else:
