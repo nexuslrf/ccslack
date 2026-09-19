@@ -1981,6 +1981,7 @@ async def _handle_purge(
 
     count: int | None = None
     since_seconds: float | None = None
+    before_seconds: float | None = None
     if not args or args[0].lower() == "all":
         pass
     elif args[0].lower() == "since":
@@ -1991,6 +1992,19 @@ async def _handle_purge(
                 channel=channel_id,
                 user=user_id,
                 text=f"ccslack: usage `{config.slash_command} purge since <30m|2h|1d>`.",
+            )
+            return
+    elif args[0].lower() == "before":
+        before_seconds = _parse_duration(args[1]) if len(args) > 1 else None
+        if before_seconds is None:
+            await _post_ephemeral(
+                client.chat_postEphemeral,
+                channel=channel_id,
+                user=user_id,
+                text=(
+                    f"ccslack: usage `{config.slash_command} purge "
+                    "before <30m|2h|1d>`."
+                ),
             )
             return
     elif args[0].isdigit():
@@ -2008,7 +2022,11 @@ async def _handle_purge(
         return
 
     deleted = await purge_mod.purge(
-        client, channel_id, count=count, since_seconds=since_seconds
+        client,
+        channel_id,
+        count=count,
+        since_seconds=since_seconds,
+        before_seconds=before_seconds,
     )
     await _post_ephemeral(
         client.chat_postEphemeral,
