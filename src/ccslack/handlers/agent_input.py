@@ -69,7 +69,14 @@ async def deliver_to_agent(
     # Record that a prompt was sent so the auto-toolbar hang detector starts
     # its clock — if the agent produces no output for >2 min, the toolbar
     # auto-opens.
-    if not is_shell:
+    #
+    # Agent-local slash commands (/status, /usage, /resume, /model, …) are
+    # instant TUI actions, not prompts the agent "works on" — seeding the
+    # hang clock for them false-alarms 2 min later (no transcript events →
+    # agent looks stuck). If a command DOES trigger real work (/compact,
+    # /init), the resulting transcript activity creates the clock via
+    # mark_active, so hangs are still detected.
+    if not is_shell and not text.lstrip().startswith("/"):
         from .polling.coordinator import mark_prompt_sent
 
         mark_prompt_sent(window_id)

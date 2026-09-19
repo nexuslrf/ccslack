@@ -113,3 +113,59 @@ def test_notification_filter_seeds_permission():
 
     asyncio.run(dispatch_hook_event(_Evt(), _Client()))
     assert "@4" in coord._auto_toolbar  # permission → seeded
+
+
+@pytest.mark.asyncio
+async def test_slash_command_does_not_seed_hang_clock(monkeypatch):
+    """Agent-local commands (/status, /usage, /resume, …) must NOT start the
+    hang clock — they're instant TUI actions, and no transcript output follows,
+    so seeding the clock false-alarms the toolbar 2 min later."""
+    from ccslack.handlers import agent_input
+    from ccslack.window_state_store import window_store
+
+    coord._auto_toolbar.clear()
+
+    async def _noop_send(*a, **kw):
+        return None
+
+    monkeypatch.setattr(agent_input.tmux_manager, "send_keys", _noop_send)
+    monkeypatch.setattr(
+        agent_input.shell_capture,
+        "is_shell_window",
+        staticmethod(lambda _: False),
+    )
+
+    class _FakeClient:
+        async def chat_postEphemeral(self, **kw):  # noqa: N802
+            return {"ok": True}
+
+    window_store.get_window_state("@20")
+    for cmd in ("/status", "/usage", "/resume", "/model", "/changelog"):
+        await agent_input.deliver_to_agent(_FakeClient(), "C9", "@20", cmd)
+    assert "@20" not in coord._auto_toolbar  # no clock seeded
+
+
+@pytest.mark.asyncio
+async def test_regular_prompt_still_seeds_hang_clock(monkeypatch):
+    from ccslack.handlers import agent_input
+    from ccslack.window_state_store import window_store
+
+    coord._auto_toolbar.clear()
+
+    async def _noop_send(*a, **kw):
+        return None
+
+    monkeypatch.setattr(agent_input.tmux_manager, "send_keys", _noop_send)
+    monkeypatch.setattr(
+        agent_input.shell_capture,
+        "is_shell_window",
+        staticmethod(lambda _: False),
+    )
+
+    class _FakeClient:
+        async def chat_postEphemeral(self, **kw):  # noqa: N802
+            return {"ok": True}
+
+    window_store.get_window_state("@21")
+    await agent_input.deliver_to_agent(_FakeClient(), "C9", "@21", "run the sweep")
+    assert "@21" in coord._auto_toolbar  # real prompt → clock seeded
