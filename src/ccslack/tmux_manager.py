@@ -89,6 +89,63 @@ _TmuxError = (
 
 _EXTERNAL_DISCOVERY_TTL = 10.0  # seconds — cache external session discovery
 
+# Field separator for hand-rolled ``tmux list-panes -F`` output. libtmux's own
+# enumeration (``session.windows`` / ``window.panes``) expands *every* known
+# format variable for every row — including ``#{user}``, which makes the tmux
+# server call getpwuid() on each expansion. On hosts where user lookups go
+# through a slow NSS backend (SSSD / himmelblau / LDAP), that alone can pin
+# the single-threaded tmux server for seconds per poll. The hot polling paths
+# below therefore ask tmux for exactly the fields they need, in one call.
+_FIELD_SEP = "␟"  # U+241F; tmux octal-escapes raw control chars in -F output
+
+_WINDOW_LIST_FIELDS = (
+    "session_name",
+    "window_id",
+    "window_name",
+    "pane_active",
+    "pane_current_path",
+    "pane_current_command",
+    "pane_tty",
+    "pane_width",
+    "pane_height",
+)
+
+_PANE_LIST_FIELDS = (
+    "session_name",
+    "pane_id",
+    "pane_index",
+    "pane_active",
+    "pane_current_command",
+    "pane_current_path",
+    "pane_width",
+    "pane_height",
+)
+
+
+def _format_string(fields: tuple[str, ...]) -> str:
+    return _FIELD_SEP.join("#{" + f + "}" for f in fields)
+
+
+def _parse_format_rows(
+    lines: list[str], fields: tuple[str, ...]
+) -> list[dict[str, str]]:
+    """Split ``-F`` output lines into dicts; drop malformed rows."""
+    rows: list[dict[str, str]] = []
+    for line in lines:
+        parts = line.split(_FIELD_SEP)
+        if len(parts) != len(fields):
+            continue
+        rows.append(dict(zip(fields, parts, strict=True)))
+    return rows
+
+
+def _to_int(value: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 # Foreground commands that mean the pane is sitting at an interactive shell
 # (i.e. the agent CLI has exited). Used by interrupt_agent_to_shell() to tell
 # "the task was interrupted but the REPL is still up" from "the agent quit".
@@ -182,15 +239,25 @@ class TmuxManager:
         """
 
         def _sync_list_windows() -> list[TmuxWindow]:
-            windows = []
-            session = self.get_session()
+            rows = self._list_pane_rows(
+                ["-s", "-t", self.session_name], _WINDOW_LIST_FIELDS
+            )
+            if rows is None:
+                return []
 
-            if not session:
-                return windows
+            # One row per pane; keep the active pane of each window (falling
+            # back to the first pane seen) while preserving window order.
+            by_window: dict[str, dict[str, str]] = {}
+            for row in rows:
+                if row["session_name"] != self.session_name:
+                    continue
+                wid = row["window_id"]
+                if wid not in by_window or row["pane_active"] == "1":
+                    by_window[wid] = row
 
-            for window in session.windows:
-                name = window.window_name or ""
-                window_id = window.window_id or ""
+            windows: list[TmuxWindow] = []
+            for window_id, row in by_window.items():
+                name = row["window_name"]
                 # Skip the main window (placeholder window)
                 if name == config.tmux_main_window_name:
                     continue
@@ -200,40 +267,47 @@ class TmuxManager:
                 # Skip hidden windows (name starts with underscore)
                 if name.startswith("_"):
                     continue
-
-                try:
-                    # Get the active pane's current path, command, and dimensions
-                    pane = window.active_pane
-                    if pane:
-                        cwd = pane.pane_current_path or ""
-                        pane_cmd = pane.pane_current_command or ""
-                        pane_tty = getattr(pane, "pane_tty", "") or ""
-                        pw = int(pane.pane_width or 0)
-                        ph = int(pane.pane_height or 0)
-                    else:
-                        cwd = ""
-                        pane_cmd = ""
-                        pane_tty = ""
-                        pw = 0
-                        ph = 0
-
-                    windows.append(
-                        TmuxWindow(
-                            window_id=window.window_id or "",
-                            window_name=name,
-                            cwd=cwd,
-                            pane_current_command=pane_cmd,
-                            pane_tty=pane_tty,
-                            pane_width=pw,
-                            pane_height=ph,
-                        )
+                windows.append(
+                    TmuxWindow(
+                        window_id=window_id,
+                        window_name=name,
+                        cwd=row["pane_current_path"],
+                        pane_current_command=row["pane_current_command"],
+                        pane_tty=row["pane_tty"],
+                        pane_width=_to_int(row["pane_width"]),
+                        pane_height=_to_int(row["pane_height"]),
                     )
-                except _TmuxError as e:
-                    logger.debug("Error getting window info: %s", e)
-
+                )
             return windows
 
         return await asyncio.to_thread(_sync_list_windows)
+
+    def _list_pane_rows(
+        self, target_args: list[str], fields: tuple[str, ...]
+    ) -> list[dict[str, str]] | None:
+        """Run ``tmux list-panes`` with a minimal ``-F`` and parse the rows.
+
+        Returns ``None`` when the target session/window does not exist or the
+        tmux server is unreachable. Deliberately bypasses libtmux's object
+        enumeration (see ``_FIELD_SEP``) — this is the hot path polled every
+        second for every bound channel.
+        """
+        try:
+            proc = self.server.cmd(
+                "list-panes", *target_args, "-F", _format_string(fields)
+            )
+        except _TmuxError as exc:
+            logger.debug("tmux list-panes failed: %s", exc)
+            self._reset_server()
+            return None
+        if proc.stderr:
+            err = " ".join(proc.stderr)
+            if "can't find" in err or "no server running" in err:
+                return None
+            logger.warning("tmux list-panes error: %s", err)
+            self._reset_server()
+            return None
+        return _parse_format_rows(list(proc.stdout), fields)
 
     async def find_window_by_name(self, window_name: str) -> TmuxWindow | None:
         """Find a window by its name.
@@ -992,31 +1066,24 @@ class TmuxManager:
         """
 
         def _sync_list_panes() -> list[PaneInfo]:
-            session = self.get_session()
-            if not session:
+            rows = self._list_pane_rows(["-t", window_id], _PANE_LIST_FIELDS)
+            if not rows:
                 return []
-            try:
-                window = session.windows.get(window_id=window_id, default=None)
-                if not window:
-                    return []
-                result: list[PaneInfo] = []
-                for pane in window.panes:
-                    result.append(
-                        PaneInfo(
-                            pane_id=pane.pane_id or "",
-                            index=int(pane.pane_index or 0),
-                            active=pane.pane_active == "1",
-                            command=pane.pane_current_command or "",
-                            path=pane.pane_current_path or "",
-                            width=int(pane.pane_width or 0),
-                            height=int(pane.pane_height or 0),
-                        )
-                    )
-                return result
-            except _TmuxError as exc:
-                logger.warning("Failed to list panes for %s: %s", window_id, exc)
-                self._reset_server()
-                return []
+            return [
+                PaneInfo(
+                    pane_id=row["pane_id"],
+                    index=_to_int(row["pane_index"]),
+                    active=row["pane_active"] == "1",
+                    command=row["pane_current_command"],
+                    path=row["pane_current_path"],
+                    width=_to_int(row["pane_width"]),
+                    height=_to_int(row["pane_height"]),
+                )
+                for row in rows
+                # Window IDs are server-global; keep the session scoping the
+                # old ``session.windows.get(...)`` lookup provided.
+                if row["session_name"] == self.session_name
+            ]
 
         return await asyncio.to_thread(_sync_list_panes)
 
