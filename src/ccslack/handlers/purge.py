@@ -300,12 +300,21 @@ async def purge(
     if selected:
         deleted += await _delete_entries(client, channel_id, selected)
         _drop_entries(channel_id, {e["ts"] for e in selected})
-    # The history orphan-scan is for a FULL purge only — it deletes every bot
-    # message in the channel regardless of age. before/since are windowed
-    # purges and must never trigger it (before used to, wiping messages
-    # beyond the requested scope).
+    # The UNwindowed orphan-scan is for a FULL purge only — it deletes every
+    # bot message in the channel regardless of age. since/before run their own
+    # AGE-FILTERED history scan instead: the ledger is often empty for old
+    # messages (predating the ledger, dropped by earlier purges, previous bot
+    # instances), so window purges must rely on Slack's own message timestamps.
     if count is None and since_seconds is None and before_seconds is None:
         deleted += await _purge_scan_history(client, channel_id)
+    elif before_seconds is not None:
+        deleted += await _purge_scan_history_windowed(
+            client, channel_id, min_age=before_seconds
+        )
+    elif since_seconds is not None:
+        deleted += await _purge_scan_history_windowed(
+            client, channel_id, max_age=since_seconds
+        )
     return deleted
 
 
@@ -389,6 +398,99 @@ async def _scan_history_page(
     if result and result.get("has_more"):
         next_cursor = (result.get("response_metadata") or {}).get("next_cursor") or None
     return deleted, next_cursor
+
+
+def _in_time_window(ts: str, *, min_age: float | None, max_age: float | None) -> bool:
+    """True when a message ts falls in the requested age window.
+
+    ``min_age`` — message must be at least this old (``before`` semantics).
+    ``max_age`` — message must be at most this old (``since`` semantics).
+    Unparseable ts → False (never delete on a technicality).
+    """
+    try:
+        age = time.time() - float(ts)
+    except (TypeError, ValueError):
+        return False
+    if min_age is not None and age < min_age:
+        return False
+    return max_age is None or age <= max_age
+
+
+async def _delete_if_in_window(
+    client: SlackClient,
+    channel_id: str,
+    msg: dict,
+    bot_id: str,
+    preserved: set[str],
+    *,
+    min_age: float | None,
+    max_age: float | None,
+) -> int:
+    """Delete one history message when it's a bot msg in the age window."""
+    ts = msg.get("ts", "")
+    if (
+        not ts
+        or ts in preserved
+        or msg.get("bot_id") != bot_id
+        or not _in_time_window(ts, min_age=min_age, max_age=max_age)
+    ):
+        return 0
+    await _delete_one_message(client, channel_id, ts)
+    deleted = 1
+    await asyncio.sleep(_DELETE_INTERVAL)
+    # Thread replies aren't returned by conversations_history — sweep them.
+    if msg.get("reply_count", 0) > 0:
+        deleted += await _delete_thread_replies(client, channel_id, ts, bot_id)
+    return deleted
+
+
+async def _purge_scan_history_windowed(
+    client: SlackClient,
+    channel_id: str,
+    *,
+    min_age: float | None = None,
+    max_age: float | None = None,
+) -> int:
+    """Scan channel history and delete bot messages in the requested age window.
+
+    Same orphan-catching purpose as _purge_scan_history but age-filtered — the
+    ledger can be empty for old messages (posted before the ledger existed,
+    dropped by earlier purges, or posted by a previous bot instance), so
+    since/before must rely on Slack's own message timestamps.
+    """
+    try:
+        auth = await client.auth_test()
+        bot_id = (auth.get("bot_id") or "") if auth else ""
+    except SlackApiError:
+        return 0
+    if not bot_id:
+        return 0
+    preserved = _status_preserved_ts(channel_id)
+    deleted = 0
+    cursor: str | None = None
+    while True:
+        try:
+            kwargs: dict[str, Any] = {"channel": channel_id, "limit": 200}
+            if cursor:
+                kwargs["cursor"] = cursor
+            result = await client.conversations_history(**kwargs)
+            messages = (result.get("messages") or []) if result else []
+            for msg in messages:
+                deleted += await _delete_if_in_window(
+                    client, channel_id, msg, bot_id, preserved,
+                    min_age=min_age, max_age=max_age,
+                )
+            if result and result.get("has_more"):
+                cursor = (
+                    (result.get("response_metadata") or {}).get("next_cursor") or None
+                )
+            else:
+                cursor = None
+        except SlackApiError:
+            break
+        if not cursor:
+            break
+    return deleted
 
 
 async def _purge_scan_history(client: SlackClient, channel_id: str) -> int:

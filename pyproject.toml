@@ -101,6 +101,8 @@ max-statements = 60
 "src/ccslack/handlers/table_render.py" = ["C901"]
 # Toolbar register() grew one action per button group (open/expand/close/keys).
 "src/ccslack/handlers/toolbar.py" = ["C901"]
+# purge() dispatcher branches across four modes (N/all/since/before) + scans.
+"src/ccslack/handlers/purge.py" = ["C901"]
 # Message routing forks on tool pairing, thread routing, tables, and purge.
 "src/ccslack/handlers/messaging_pipeline/message_routing.py" = ["C901"]
 
