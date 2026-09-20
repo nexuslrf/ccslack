@@ -279,10 +279,12 @@ async def purge(
         selected = entries
     deleted = 0
 
-    # On a full purge, sweep orphan replies inside ledger-known thread parents
-    # BEFORE deleting the parents. conversations.replies requires the parent to
-    # still exist; if we delete the parent first the replies become unreachable.
-    if count is None and since_seconds is None:
+    # On any non-N purge (all / since / before), sweep orphan replies inside
+    # the SELECTED ledger-known thread parents BEFORE deleting the parents —
+    # conversations.replies requires the parent to still exist; once deleted,
+    # the replies become unreachable. before only selects parents older than
+    # the cutoff, so recent threads are untouched.
+    if count is None:
         thread_parents = [e["ts"] for e in selected if e.get("kind") == "thread_parent"]
         if thread_parents:
             bot_id = ""
@@ -298,7 +300,11 @@ async def purge(
     if selected:
         deleted += await _delete_entries(client, channel_id, selected)
         _drop_entries(channel_id, {e["ts"] for e in selected})
-    if count is None and since_seconds is None:
+    # The history orphan-scan is for a FULL purge only — it deletes every bot
+    # message in the channel regardless of age. before/since are windowed
+    # purges and must never trigger it (before used to, wiping messages
+    # beyond the requested scope).
+    if count is None and since_seconds is None and before_seconds is None:
         deleted += await _purge_scan_history(client, channel_id)
     return deleted
 
