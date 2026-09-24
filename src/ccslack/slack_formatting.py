@@ -267,6 +267,7 @@ def _list_blocks(list_text: str) -> list[dict[str, Any]]:
             # multiple elements ("1. aaa / (nested) / 2. bbb"), so the
             # element's offset must carry the marker's own number to keep
             # Slack's numbering in sync with the markdown.
+            # offset 0 (= marker "1.") is the default — omit it.
             if current_style == "ordered" and current_offset:
                 element["offset"] = current_offset
             elements.append(element)
@@ -287,7 +288,11 @@ def _list_blocks(list_text: str) -> list[dict[str, Any]]:
         offset: int | None = None
         if style == "ordered":
             try:
-                offset = int(marker[:-1])  # strip the "." / ")"
+                # Slack's rich_text_list "offset" is the count of numbers
+                # SKIPPED before rendering — a list starting at "2." needs
+                # offset=1 (renders 2, 3, …). Empirically verified: offset=N
+                # renders starting at N+1.
+                offset = int(marker[:-1]) - 1
             except ValueError:
                 offset = None
         if style != current_style or indent != current_indent:

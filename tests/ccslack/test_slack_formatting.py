@@ -262,9 +262,11 @@ def test_ordered_numbering_continues_after_nested_sublist():
     ordered = [e for e in els if e["style"] == "ordered"]
     assert len(ordered) == 2
     assert ordered[0]["elements"][0]["elements"][0]["text"] == "aaa"
-    assert ordered[0].get("offset") == 1
+    # "1." → offset 0 (omitted — default); "2." → offset 1 (skip one number,
+    # rendering starts at 2 — Slack's offset counts skipped numbers).
+    assert not ordered[0].get("offset")
     assert ordered[1]["elements"][0]["elements"][0]["text"] == "bbb"
-    assert ordered[1].get("offset") == 2
+    assert ordered[1].get("offset") == 1
 
 
 def test_ordered_offset_from_large_marker():
@@ -272,4 +274,4 @@ def test_ordered_offset_from_large_marker():
 
     blocks, _ = to_blocks("10. ten\n11. eleven")
     el = [b for b in blocks if b["type"] == "rich_text"][0]["elements"][0]
-    assert el["offset"] == 10
+    assert el["offset"] == 9  # "10." → skip 9 numbers
