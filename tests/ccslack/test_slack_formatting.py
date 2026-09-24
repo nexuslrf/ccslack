@@ -249,3 +249,27 @@ def test_text_quote_list_interleave():
     blocks, _ = to_blocks("intro\n> quote\n- item\noutro")
     kinds = [b["type"] for b in blocks]
     assert kinds == ["section", "rich_text", "rich_text", "section"]
+
+
+def test_ordered_numbering_continues_after_nested_sublist():
+    """Nested sublists split the outer ordered run into separate elements;
+    the resumed element must carry offset from the markdown marker number so
+    Slack continues numbering (2., 3., …) instead of restarting at 1."""
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("1. aaa\n    - a1\n2. bbb\n    - b1")
+    els = [b for b in blocks if b["type"] == "rich_text"][0]["elements"]
+    ordered = [e for e in els if e["style"] == "ordered"]
+    assert len(ordered) == 2
+    assert ordered[0]["elements"][0]["elements"][0]["text"] == "aaa"
+    assert ordered[0].get("offset") == 1
+    assert ordered[1]["elements"][0]["elements"][0]["text"] == "bbb"
+    assert ordered[1].get("offset") == 2
+
+
+def test_ordered_offset_from_large_marker():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("10. ten\n11. eleven")
+    el = [b for b in blocks if b["type"] == "rich_text"][0]["elements"][0]
+    assert el["offset"] == 10

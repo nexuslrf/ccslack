@@ -247,25 +247,33 @@ def _list_blocks(list_text: str) -> list[dict[str, Any]]:
     elements: list[dict[str, Any]] = []
     current_style: str | None = None
     current_indent: int = -1
+    current_offset: int | None = None
     items: list[dict[str, Any]] = []
 
     def _flush() -> None:
-        nonlocal items, current_style, current_indent
+        nonlocal items, current_style, current_indent, current_offset
         if items and current_style:
-            elements.append(
-                {
-                    "type": "rich_text_list",
-                    # NOTE: Slack's API validates the FLAT style string
-                    # ("bullet"/"ordered") — the nested {"list": ...} object
-                    # from the docs is rejected with invalid_blocks here.
-                    "style": current_style,
-                    "indent": current_indent,
-                    "elements": items,
-                }
-            )
+            element: dict[str, Any] = {
+                "type": "rich_text_list",
+                # NOTE: Slack's API validates the FLAT style string
+                # ("bullet"/"ordered") — the nested {"list": ...} object
+                # from the docs is rejected with invalid_blocks here.
+                "style": current_style,
+                "indent": current_indent,
+                "elements": items,
+            }
+            # Ordered lists restart at 1 in each separate rich_text_list
+            # element. A nested sublist splits the outer ordered run into
+            # multiple elements ("1. aaa / (nested) / 2. bbb"), so the
+            # element's offset must carry the marker's own number to keep
+            # Slack's numbering in sync with the markdown.
+            if current_style == "ordered" and current_offset:
+                element["offset"] = current_offset
+            elements.append(element)
         items = []
         current_style = None
         current_indent = -1
+        current_offset = None
 
     for line in list_text.split("\n"):
         m = _LIST_LINE_RE.match(line)
@@ -276,10 +284,17 @@ def _list_blocks(list_text: str) -> list[dict[str, Any]]:
             len(spaces) // _INDENT_SPACES_PER_LEVEL, _MAX_LIST_INDENT
         )
         style = "ordered" if marker[0].isdigit() else "bullet"
+        offset: int | None = None
+        if style == "ordered":
+            try:
+                offset = int(marker[:-1])  # strip the "." / ")"
+            except ValueError:
+                offset = None
         if style != current_style or indent != current_indent:
             _flush()
             current_style = style
             current_indent = indent
+            current_offset = offset
         items.append(
             {
                 "type": "rich_text_section",
