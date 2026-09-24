@@ -122,10 +122,133 @@ def _chunk(text: str, limit: int) -> list[str]:
     return chunks
 
 
+_QUOTE_LINE_RE = re.compile(r"^\s*>[ \t]?(.*)$", re.MULTILINE)
+# Inline markdown tokens → styled rich_text elements: *bold*, _italic_,
+# `code`, ~strike~ (after ** flattening).
+_INLINE_MD_RE = re.compile(r"(\*[^*\n]+\*|_[^_\n]+_|`[^`\n]+`|~[^~\n]+~)")
+
+
+def _split_quote_segments(text: str) -> list[tuple[bool, str]]:
+    """Split text into alternating (is_quote, segment) runs.
+
+    A quote run is one or more consecutive lines starting with ``>`` (the
+    marker is stripped per line). ``>>>`` (Slack's literal) is left alone —
+    only single-marker lines become quotes.
+    """
+    segments: list[tuple[bool, str]] = []
+    current_quote: bool | None = None
+    buf: list[str] = []
+
+    def _flush() -> None:
+        nonlocal buf, current_quote
+        if buf and current_quote is not None:
+            segments.append((current_quote, "\n".join(buf)))
+        buf = []
+        current_quote = None
+
+    for line in text.split("\n"):
+        is_quote, stripped = _classify_quote_line(line)
+        if current_quote is None or current_quote != is_quote:
+            _flush()
+            current_quote = is_quote
+        buf.append(stripped)
+    if buf and current_quote is not None:
+        segments.append((current_quote, "\n".join(buf)))
+    return segments
+
+
+def _classify_quote_line(line: str) -> tuple[bool, str]:
+    """Return (is_quote, content) for one line (``>>>`` literals stay text)."""
+    if line.lstrip().startswith(">>>"):
+        return False, line
+    m = _QUOTE_LINE_RE.match(line)
+    if m:
+        return True, m.group(1)
+    return False, line
+
+
+def _inline_md_elements(text: str) -> list[dict[str, Any]]:
+    """Convert minimal inline markdown into styled rich_text text elements."""
+    # Flatten **x** → *x* first, mirroring to_mrkdwn.
+    flattened = _BOLD_RE.sub(r"*\1*", text)
+    elements: list[dict[str, Any]] = []
+    for token in _INLINE_MD_RE.split(flattened):
+        if not token:
+            continue
+        style_key, body = _token_style(token)
+        element: dict[str, Any] = {"type": "text", "text": body}
+        if style_key:
+            element["style"] = {style_key: True}
+        elements.append(element)
+    return elements
+
+
+# Inline-style marker → rich_text style key. A token is styled only when the
+# same marker wraps non-empty content (longer than the two markers alone).
+_TOKEN_STYLES: tuple[tuple[str, str], ...] = (
+    ("*", "bold"),
+    ("_", "italic"),
+    ("`", "code"),
+    ("~", "strike"),
+)
+_TOKEN_MIN_LEN = 3
+
+
+def _token_style(token: str) -> tuple[str, str]:
+    """Return (style_key, body) for one inline markdown token."""
+    for marker, key in _TOKEN_STYLES:
+        if (
+            token.startswith(marker)
+            and token.endswith(marker)
+            and len(token) >= _TOKEN_MIN_LEN
+        ):
+            return key, token[1:-1]
+    return "", token
+
+
+def _quote_block(quote_text: str) -> dict[str, Any]:
+    """A rich_text block rendering one quoted run as a blockquote."""
+    return {
+        "type": "rich_text",
+        "elements": [
+            {
+                "type": "rich_text_quote",
+                "elements": _inline_md_elements(quote_text.strip()),
+            }
+        ],
+    }
+
+
+def _quote_blocks(quote_text: str) -> list[dict[str, Any]]:
+    """Quote blocks for a quoted run, chunked to the per-block char limit."""
+    stripped = quote_text.strip()
+    if not stripped:
+        return []
+    if len(stripped) <= SECTION_TEXT_LIMIT:
+        return [_quote_block(stripped)]
+    return [
+        _quote_block(chunk) for chunk in _chunk(stripped, SECTION_TEXT_LIMIT)
+    ]
+
+
 def _section_blocks(text: str) -> list[dict[str, Any]]:
-    """One or more ``section`` blocks, chunked to the per-block char limit."""
+    """Section blocks, chunked to the per-block char limit.
+
+    Markdown blockquote lines (``> quoted``) become rich_text quote blocks —
+    Block Kit mrkdwn does NOT render ``>`` as a quote, so quotes must be their
+    own rich_text blocks to display properly.
+    """
     body = to_mrkdwn(text).strip()
-    return [_mrkdwn_section(chunk) for chunk in _chunk(body, SECTION_TEXT_LIMIT)]
+    blocks: list[dict[str, Any]] = []
+    for is_quote, segment in _split_quote_segments(body):
+        if is_quote:
+            blocks.extend(_quote_blocks(segment))
+        elif segment.strip():
+            blocks.extend(
+                _mrkdwn_section(c)
+                for c in _chunk(segment.strip(), SECTION_TEXT_LIMIT)
+            )
+    return blocks
 
 
 def _code_blocks(code: str) -> list[dict[str, Any]]:

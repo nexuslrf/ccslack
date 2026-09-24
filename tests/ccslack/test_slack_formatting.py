@@ -149,3 +149,48 @@ async def test_inline_table_routes_end_to_end(monkeypatch):
         any(b.get("type") == "table" for b in (kw.get("blocks") or []))
         for kw in posted
     )
+
+
+def test_blockquote_becomes_rich_text_quote_block():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("intro\n> a quoted line\noutro")
+    kinds = [b["type"] for b in blocks]
+    assert "rich_text" in kinds
+    quote = [b for b in blocks if b["type"] == "rich_text"][0]
+    assert quote["elements"][0]["type"] == "rich_text_quote"
+    assert quote["elements"][0]["elements"][0]["text"] == "a quoted line"
+
+
+def test_blockquote_bold_styled():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks('> *"Visual reconstructions confirm these advantages:*')
+    quote = [b for b in blocks if b["type"] == "rich_text"][0]
+    elem = quote["elements"][0]["elements"][0]
+    assert elem["text"] == '"Visual reconstructions confirm these advantages:'
+    assert elem["style"] == {"bold": True}
+
+
+def test_blockquote_run_and_surrounding_text():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("before\n> q1\n> q2\nafter")
+    kinds = [b["type"] for b in blocks]
+    assert kinds == ["section", "rich_text", "section"]
+    assert "after" in blocks[2]["text"]["text"]
+    assert "before" in blocks[0]["text"]["text"]
+
+
+def test_triple_gt_literal_not_a_quote():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks(">>> raw literal stays text")
+    assert all(b["type"] != "rich_text" for b in blocks)
+
+
+def test_gt_mid_line_not_a_quote():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("5 > 3 is greater than")
+    assert all(b["type"] != "rich_text" for b in blocks)
