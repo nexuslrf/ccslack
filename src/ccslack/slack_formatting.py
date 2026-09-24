@@ -128,43 +128,61 @@ _QUOTE_LINE_RE = re.compile(r"^\s*>[ \t]?(.*)$", re.MULTILINE)
 _INLINE_MD_RE = re.compile(r"(\*[^*\n]+\*|_[^_\n]+_|`[^`\n]+`|~[^~\n]+~)")
 
 
-def _split_quote_segments(text: str) -> list[tuple[bool, str]]:
-    """Split text into alternating (is_quote, segment) runs.
+def _split_segments(text: str) -> list[tuple[str, str]]:
+    """Split text into consecutive (kind, segment) runs of one kind each.
 
-    A quote run is one or more consecutive lines starting with ``>`` (the
-    marker is stripped per line). ``>>>`` (Slack's literal) is left alone —
-    only single-marker lines become quotes.
+    Kinds: text / quote / list. A list run keeps the raw item lines
+    (markers + indents) for _list_blocks to parse.
     """
-    segments: list[tuple[bool, str]] = []
-    current_quote: bool | None = None
+    segments: list[tuple[str, str]] = []
+    current_kind: str | None = None
     buf: list[str] = []
 
     def _flush() -> None:
-        nonlocal buf, current_quote
-        if buf and current_quote is not None:
-            segments.append((current_quote, "\n".join(buf)))
+        nonlocal buf, current_kind
+        if buf and current_kind is not None:
+            segments.append((current_kind, "\n".join(buf)))
         buf = []
-        current_quote = None
+        current_kind = None
 
     for line in text.split("\n"):
-        is_quote, stripped = _classify_quote_line(line)
-        if current_quote is None or current_quote != is_quote:
+        kind, content = _classify_line(line)
+        if current_kind is None or current_kind != kind:
             _flush()
-            current_quote = is_quote
-        buf.append(stripped)
-    if buf and current_quote is not None:
-        segments.append((current_quote, "\n".join(buf)))
+            current_kind = kind
+        buf.append(content)
+    if buf and current_kind is not None:
+        segments.append((current_kind, "\n".join(buf)))
     return segments
 
 
-def _classify_quote_line(line: str) -> tuple[bool, str]:
-    """Return (is_quote, content) for one line (``>>>`` literals stay text)."""
+_LIST_LINE_RE = re.compile(r"^(\s*)([-*+]|\d+[.)])[ \t]+(.*)$")
+# Markdown horizontal rules (``---``, ``* * *``, ``___``) — not list items.
+_HR_RE = re.compile(r"^\s*([-*_](\s*[-*_])*)$")
+_MAX_LIST_INDENT = 8
+_INDENT_SPACES_PER_LEVEL = 2
+
+# Segment kinds for _split_segments.
+_TEXT = "text"
+_QUOTE = "quote"
+_LIST = "list"
+
+
+def _classify_line(line: str) -> tuple[str, str]:
+    """Return (kind, content) for one line.
+
+    ``>>>`` literals stay text; ``> `` lines are quotes; ``- `` / ``* `` /
+    ``1. `` lines are list items (content kept raw — the marker is parsed
+    again in _list_blocks).
+    """
     if line.lstrip().startswith(">>>"):
-        return False, line
+        return _TEXT, line
     m = _QUOTE_LINE_RE.match(line)
     if m:
-        return True, m.group(1)
-    return False, line
+        return _QUOTE, m.group(1)
+    if _LIST_LINE_RE.match(line) and not _HR_RE.match(line):
+        return _LIST, line
+    return _TEXT, line
 
 
 def _inline_md_elements(text: str) -> list[dict[str, Any]]:
@@ -219,6 +237,58 @@ def _quote_block(quote_text: str) -> dict[str, Any]:
     }
 
 
+def _list_blocks(list_text: str) -> list[dict[str, Any]]:
+    """rich_text list block(s) for a run of markdown list lines.
+
+    Groups consecutive items with the same indent + style into one
+    rich_text_list element; nesting via the element's ``indent`` field
+    (2 spaces per level, capped at 8).
+    """
+    elements: list[dict[str, Any]] = []
+    current_style: str | None = None
+    current_indent: int = -1
+    items: list[dict[str, Any]] = []
+
+    def _flush() -> None:
+        nonlocal items, current_style, current_indent
+        if items and current_style:
+            elements.append(
+                {
+                    "type": "rich_text_list",
+                    "style": {"list": current_style},
+                    "indent": current_indent,
+                    "elements": items,
+                }
+            )
+        items = []
+        current_style = None
+        current_indent = -1
+
+    for line in list_text.split("\n"):
+        m = _LIST_LINE_RE.match(line)
+        if not m:
+            continue
+        spaces, marker, content = m.groups()
+        indent = min(
+            len(spaces) // _INDENT_SPACES_PER_LEVEL, _MAX_LIST_INDENT
+        )
+        style = "ordered" if marker[0].isdigit() else "bullet"
+        if style != current_style or indent != current_indent:
+            _flush()
+            current_style = style
+            current_indent = indent
+        items.append(
+            {
+                "type": "rich_text_section",
+                "elements": _inline_md_elements(content),
+            }
+        )
+    _flush()
+    if not elements:
+        return []
+    return [{"type": "rich_text", "elements": elements}]
+
+
 def _quote_blocks(quote_text: str) -> list[dict[str, Any]]:
     """Quote blocks for a quoted run, chunked to the per-block char limit."""
     stripped = quote_text.strip()
@@ -240,9 +310,11 @@ def _section_blocks(text: str) -> list[dict[str, Any]]:
     """
     body = to_mrkdwn(text).strip()
     blocks: list[dict[str, Any]] = []
-    for is_quote, segment in _split_quote_segments(body):
-        if is_quote:
+    for kind, segment in _split_segments(body):
+        if kind == _QUOTE:
             blocks.extend(_quote_blocks(segment))
+        elif kind == _LIST:
+            blocks.extend(_list_blocks(segment))
         elif segment.strip():
             blocks.extend(
                 _mrkdwn_section(c)

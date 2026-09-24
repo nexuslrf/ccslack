@@ -194,3 +194,58 @@ def test_gt_mid_line_not_a_quote():
 
     blocks, _ = to_blocks("5 > 3 is greater than")
     assert all(b["type"] != "rich_text" for b in blocks)
+
+
+def test_bullet_list_becomes_rich_text_list():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("plan:\n- one\n- two")
+    lists = [b for b in blocks if b["type"] == "rich_text"]
+    assert lists
+    el = lists[0]["elements"][0]
+    assert el["type"] == "rich_text_list"
+    assert el["style"] == {"list": "bullet"}
+    assert el["elements"][0]["elements"][0]["text"] == "one"
+
+
+def test_ordered_list_style():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("steps:\n1. first\n2. second")
+    el = [b for b in blocks if b["type"] == "rich_text"][0]["elements"][0]
+    assert el["style"] == {"list": "ordered"}
+    assert el["elements"][1]["elements"][0]["text"] == "second"
+
+
+def test_nested_list_indent():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("- top\n  - nested")
+    els = [b for b in blocks if b["type"] == "rich_text"][0]["elements"]
+    assert els[0]["indent"] == 0
+    assert els[1]["indent"] == 1
+
+
+def test_list_inline_bold_styled():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("- step with *bold* bit")
+    els = [b for b in blocks if b["type"] == "rich_text"][0]["elements"][0]
+    styled = [e for e in els["elements"][0]["elements"] if e.get("style")]
+    assert styled[0]["style"] == {"bold": True}
+    assert styled[0]["text"] == "bold"
+
+
+def test_horizontal_rule_not_a_list():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("above\n\n---\n\nbelow")
+    assert all(b["type"] != "rich_text" for b in blocks)
+
+
+def test_text_quote_list_interleave():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("intro\n> quote\n- item\noutro")
+    kinds = [b["type"] for b in blocks]
+    assert kinds == ["section", "rich_text", "rich_text", "section"]
