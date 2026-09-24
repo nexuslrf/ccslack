@@ -204,7 +204,7 @@ def test_bullet_list_becomes_rich_text_list():
     assert lists
     el = lists[0]["elements"][0]
     assert el["type"] == "rich_text_list"
-    assert el["style"] == {"list": "bullet"}
+    assert el["style"] == "bullet"  # flat string — the nested object is rejected by the API
     assert el["elements"][0]["elements"][0]["text"] == "one"
 
 
@@ -213,7 +213,7 @@ def test_ordered_list_style():
 
     blocks, _ = to_blocks("steps:\n1. first\n2. second")
     el = [b for b in blocks if b["type"] == "rich_text"][0]["elements"][0]
-    assert el["style"] == {"list": "ordered"}
+    assert el["style"] == "ordered"
     assert el["elements"][1]["elements"][0]["text"] == "second"
 
 

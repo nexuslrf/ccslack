@@ -255,7 +255,10 @@ def _list_blocks(list_text: str) -> list[dict[str, Any]]:
             elements.append(
                 {
                     "type": "rich_text_list",
-                    "style": {"list": current_style},
+                    # NOTE: Slack's API validates the FLAT style string
+                    # ("bullet"/"ordered") — the nested {"list": ...} object
+                    # from the docs is rejected with invalid_blocks here.
+                    "style": current_style,
                     "indent": current_indent,
                     "elements": items,
                 }
