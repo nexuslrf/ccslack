@@ -160,7 +160,6 @@ _LIST_LINE_RE = re.compile(r"^(\s*)([-*+]|\d+[.)])[ \t]+(.*)$")
 # Markdown horizontal rules (``---``, ``* * *``, ``___``) — not list items.
 _HR_RE = re.compile(r"^\s*([-*_](\s*[-*_])*)$")
 _MAX_LIST_INDENT = 8
-_INDENT_SPACES_PER_LEVEL = 2
 
 # Segment kinds for _split_segments.
 _TEXT = "text"
@@ -237,21 +236,72 @@ def _quote_block(quote_text: str) -> dict[str, Any]:
     }
 
 
+def _parse_list_items(
+    list_text: str,
+) -> list[tuple[int, str, int | None, dict[str, Any]]]:
+    """Parse markdown list lines into (spaces, style, offset, section) tuples."""
+    parsed: list[tuple[int, str, int | None, dict[str, Any]]] = []
+    for line in list_text.split("\n"):
+        m = _LIST_LINE_RE.match(line)
+        if not m:
+            continue
+        spaces, marker, content = m.groups()
+        # Markdown treats a tab as one indent step (4 spaces by convention).
+        n_spaces = len(spaces.replace("\t", "    "))
+        style = "ordered" if marker[0].isdigit() else "bullet"
+        offset: int | None = None
+        if style == "ordered":
+            try:
+                # Slack's rich_text_list "offset" is the count of numbers
+                # SKIPPED before rendering — a list starting at "2." needs
+                # offset=1 (renders 2, 3, …).
+                offset = int(marker[:-1]) - 1
+            except ValueError:
+                offset = None
+        parsed.append(
+            (
+                n_spaces,
+                style,
+                offset,
+                {
+                    "type": "rich_text_section",
+                    "elements": _inline_md_elements(content),
+                },
+            )
+        )
+    return parsed
+
+
 def _list_blocks(list_text: str) -> list[dict[str, Any]]:
     """rich_text list block(s) for a run of markdown list lines.
 
-    Groups consecutive items with the same indent + style into one
-    rich_text_list element; nesting via the element's ``indent`` field
-    (2 spaces per level, capped at 8).
+    Slack's rich_text_list "indent" is a LEVEL count (0-8), not a space
+    count — one nesting level must render indent=1 whether the markdown used
+    2 or 4 spaces. Indents are normalized by ranking the distinct widths
+    used in this run: the shallowest nested width is level 1, the next is 2.
+    Groups consecutive same-(style, level) items into one list element;
+    ordered elements carry "offset" from the marker number so numbering
+    continues across nested interruptions.
     """
+    parsed = _parse_list_items(list_text)
+
+    # Level normalization: rank distinct non-zero indent widths.
+    distinct = sorted({s for s, _, _, _ in parsed if s > 0})
+
+    def _level(n_spaces: int) -> int:
+        if n_spaces == 0:
+            return 0
+        return min(distinct.index(n_spaces) + 1, _MAX_LIST_INDENT)
+
+    # Pass 2: group consecutive (style, level) runs into list elements.
     elements: list[dict[str, Any]] = []
     current_style: str | None = None
-    current_indent: int = -1
+    current_level: int = -1
     current_offset: int | None = None
     items: list[dict[str, Any]] = []
 
     def _flush() -> None:
-        nonlocal items, current_style, current_indent, current_offset
+        nonlocal items, current_style, current_level, current_offset
         if items and current_style:
             element: dict[str, Any] = {
                 "type": "rich_text_list",
@@ -259,7 +309,7 @@ def _list_blocks(list_text: str) -> list[dict[str, Any]]:
                 # ("bullet"/"ordered") — the nested {"list": ...} object
                 # from the docs is rejected with invalid_blocks here.
                 "style": current_style,
-                "indent": current_indent,
+                "indent": current_level,
                 "elements": items,
             }
             # Ordered lists restart at 1 in each separate rich_text_list
@@ -273,39 +323,17 @@ def _list_blocks(list_text: str) -> list[dict[str, Any]]:
             elements.append(element)
         items = []
         current_style = None
-        current_indent = -1
+        current_level = -1
         current_offset = None
 
-    for line in list_text.split("\n"):
-        m = _LIST_LINE_RE.match(line)
-        if not m:
-            continue
-        spaces, marker, content = m.groups()
-        indent = min(
-            len(spaces) // _INDENT_SPACES_PER_LEVEL, _MAX_LIST_INDENT
-        )
-        style = "ordered" if marker[0].isdigit() else "bullet"
-        offset: int | None = None
-        if style == "ordered":
-            try:
-                # Slack's rich_text_list "offset" is the count of numbers
-                # SKIPPED before rendering — a list starting at "2." needs
-                # offset=1 (renders 2, 3, …). Empirically verified: offset=N
-                # renders starting at N+1.
-                offset = int(marker[:-1]) - 1
-            except ValueError:
-                offset = None
-        if style != current_style or indent != current_indent:
+    for n_spaces, style, offset, section in parsed:
+        level = _level(n_spaces)
+        if style != current_style or level != current_level:
             _flush()
             current_style = style
-            current_indent = indent
+            current_level = level
             current_offset = offset
-        items.append(
-            {
-                "type": "rich_text_section",
-                "elements": _inline_md_elements(content),
-            }
-        )
+        items.append(section)
     _flush()
     if not elements:
         return []
