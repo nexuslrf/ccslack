@@ -135,6 +135,11 @@ async def test_slash_command_does_not_seed_hang_clock(monkeypatch):
         staticmethod(lambda _: False),
     )
 
+    async def _fake_open_toolbar(_client, _channel, _wid):
+        pass
+
+    monkeypatch.setattr("ccslack.handlers.toolbar.open_toolbar", _fake_open_toolbar)
+
     class _FakeClient:
         async def chat_postEphemeral(self, **kw):  # noqa: N802
             return {"ok": True}
@@ -169,3 +174,100 @@ async def test_regular_prompt_still_seeds_hang_clock(monkeypatch):
     window_store.get_window_state("@21")
     await agent_input.deliver_to_agent(_FakeClient(), "C9", "@21", "run the sweep")
     assert "@21" in coord._auto_toolbar  # real prompt → clock seeded
+
+
+@pytest.mark.asyncio
+async def test_picker_command_pops_toolbar(monkeypatch):
+    """TUI-picker commands (/model for pi) open the toolbar automatically."""
+    from ccslack.handlers import agent_input
+    from ccslack.window_state_store import window_store
+
+    opened = []
+
+    async def _fake_open_toolbar(_client, _channel, wid):
+        opened.append(wid)
+
+    async def _noop_send(*a, **kw):
+        return None
+
+    monkeypatch.setattr("ccslack.handlers.toolbar.open_toolbar", _fake_open_toolbar)
+    monkeypatch.setattr(agent_input.tmux_manager, "send_keys", _noop_send)
+    monkeypatch.setattr(
+        agent_input.shell_capture, "is_shell_window", staticmethod(lambda _: False)
+    )
+
+    class _FakeClient:
+        async def chat_postEphemeral(self, **kw):  # noqa: N802
+            return {"ok": True}
+
+    # Window configured as pi → /model is a picker command for pi.
+    window_store.get_window_state("@30").provider_name = "pi"
+    await agent_input.deliver_to_agent(_FakeClient(), "C9", "@30", "/model")
+    assert opened == ["@30"]
+
+
+@pytest.mark.asyncio
+async def test_non_picker_command_no_toolbar(monkeypatch):
+    from ccslack.handlers import agent_input
+    from ccslack.window_state_store import window_store
+
+    opened = []
+
+    async def _fake_open_toolbar(_client, _channel, wid):
+        opened.append(wid)
+
+    monkeypatch.setattr("ccslack.handlers.toolbar.open_toolbar", _fake_open_toolbar)
+
+    async def _noop_send(*a, **kw):
+        return None
+
+    monkeypatch.setattr(agent_input.tmux_manager, "send_keys", _noop_send)
+    monkeypatch.setattr(
+        agent_input.shell_capture, "is_shell_window", staticmethod(lambda _: False)
+    )
+
+    class _FakeClient:
+        async def chat_postEphemeral(self, **kw):  # noqa: N802
+            return {"ok": True}
+
+    window_store.get_window_state("@31").provider_name = "pi"
+    # /changelog just prints text — not a picker.
+    await agent_input.deliver_to_agent(_FakeClient(), "C9", "@31", "/changelog")
+    # A plain prompt is not a command at all.
+    await agent_input.deliver_to_agent(_FakeClient(), "C9", "@31", "run the sweep")
+    assert opened == []
+
+
+@pytest.mark.asyncio
+async def test_picker_command_provider_scoped(monkeypatch):
+    """A command that's a picker for pi but NOT for another provider doesn't
+    pop the toolbar on that other provider's window."""
+    from ccslack.handlers import agent_input
+    from ccslack.window_state_store import window_store
+
+    opened = []
+
+    async def _fake_open_toolbar(_client, _channel, wid):
+        opened.append(wid)
+
+    monkeypatch.setattr("ccslack.handlers.toolbar.open_toolbar", _fake_open_toolbar)
+
+    async def _noop_send(*a, **kw):
+        return None
+
+    monkeypatch.setattr(agent_input.tmux_manager, "send_keys", _noop_send)
+    monkeypatch.setattr(
+        agent_input.shell_capture, "is_shell_window", staticmethod(lambda _: False)
+    )
+
+    class _FakeClient:
+        async def chat_postEphemeral(self, **kw):  # noqa: N802
+            return {"ok": True}
+
+    # "personality" is a codex picker command, not a pi one.
+    window_store.get_window_state("@32").provider_name = "pi"
+    await agent_input.deliver_to_agent(_FakeClient(), "C9", "@32", "/personality")
+    assert opened == []
+    window_store.get_window_state("@33").provider_name = "codex"
+    await agent_input.deliver_to_agent(_FakeClient(), "C9", "@33", "/personality")
+    assert opened == ["@33"]

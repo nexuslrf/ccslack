@@ -45,6 +45,29 @@ def _is_session_switch_command(text: str) -> bool:
     return first_word in _SESSION_SWITCH_COMMANDS
 
 
+def _is_tui_picker_command(text: str, window_id: str) -> bool:
+    """True when *text* opens an in-TUI picker for this window's provider.
+
+    These commands (e.g. ``/model``, ``/login``, ``/settings``) open a modal
+    in the terminal that must be driven with arrow keys / Enter / Esc — the
+    toolbar is how the user drives it from Slack, so it pops automatically.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("/"):
+        return False
+    cmd = stripped.split(None, 1)[0].lstrip("/").lower()
+    if not cmd:
+        return False
+    from ..providers import get_provider_for_window
+    from ..window_state_store import window_store
+
+    state = window_store.window_states.get(window_id)
+    provider = get_provider_for_window(
+        window_id, provider_name=state.provider_name if state else None
+    )
+    return cmd in provider.capabilities.tui_picker_commands
+
+
 async def deliver_to_agent(
     client,  # noqa: ANN001 — Bolt AsyncWebClient
     channel_id: str,
@@ -97,6 +120,16 @@ async def deliver_to_agent(
     except _SendError:
         logger.exception("send_keys failed for window %s", window_id)
         return False
+
+    # A TUI-picker command (/model, /login, /settings, …) opens a modal that
+    # needs arrow keys / Enter / Esc — pop the toolbar so the user can drive
+    # the picker from Slack without hunting for the 🎛️ button.
+    if not is_shell and _is_tui_picker_command(text, window_id):
+        # Lazy: toolbar pulls slack_sender + session machinery.
+        from .toolbar import open_toolbar
+
+        await open_toolbar(client, channel_id, window_id)
+        logger.info("Popped toolbar for picker command %r (window %s)", text, window_id)
 
     if is_shell and not use_marker:
         shell_capture.schedule_capture(BoltSlackClient(client), channel_id, window_id)
