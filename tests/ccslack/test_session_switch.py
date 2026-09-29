@@ -64,6 +64,11 @@ async def test_deliver_sets_switch_pending(monkeypatch):
     monkeypatch.setattr(agent_input, "shell_capture", type("S", (), {"is_shell_window": staticmethod(lambda _: False)})())
     monkeypatch.setattr(agent_input, "shell_marker", type("M", (), {"has_marker": staticmethod(lambda _: False)})())
 
+    async def _fake_open_toolbar(_client, _channel, _wid):
+        pass
+
+    monkeypatch.setattr("ccslack.handlers.toolbar.open_toolbar", _fake_open_toolbar)
+
     # Ensure the window exists in the store.
     store = window_store
     store.get_window_state("@9")  # creates if absent
@@ -92,6 +97,11 @@ async def test_deliver_does_not_flag_normal_text(monkeypatch):
     monkeypatch.setattr(agent_input.tmux_manager, "send_keys", _noop_send)
     monkeypatch.setattr(agent_input, "shell_capture", type("S", (), {"is_shell_window": staticmethod(lambda _: False)})())
     monkeypatch.setattr(agent_input, "shell_marker", type("M", (), {"has_marker": staticmethod(lambda _: False)})())
+
+    async def _fake_open_toolbar(_client, _channel, _wid):
+        pass
+
+    monkeypatch.setattr("ccslack.handlers.toolbar.open_toolbar", _fake_open_toolbar)
 
     store = window_store
     store.get_window_state("@10")

@@ -207,7 +207,9 @@ async def test_picker_command_pops_toolbar(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_non_picker_command_no_toolbar(monkeypatch):
+async def test_any_slash_command_pops_toolbar(monkeypatch):
+    """ALL slash commands pop the toolbar (any /-command may open a picker;
+    harmless when it just prints text)."""
     from ccslack.handlers import agent_input
     from ccslack.window_state_store import window_store
 
@@ -231,43 +233,12 @@ async def test_non_picker_command_no_toolbar(monkeypatch):
             return {"ok": True}
 
     window_store.get_window_state("@31").provider_name = "pi"
-    # /changelog just prints text — not a picker.
-    await agent_input.deliver_to_agent(_FakeClient(), "C9", "@31", "/changelog")
-    # A plain prompt is not a command at all.
+    for cmd in ("/changelog", "/personality", "/status", "/anything-custom"):
+        await agent_input.deliver_to_agent(_FakeClient(), "C9", "@31", cmd)
+    assert len(opened) == 4  # every slash command popped
+    # A plain prompt is not a command — no toolbar.
     await agent_input.deliver_to_agent(_FakeClient(), "C9", "@31", "run the sweep")
-    assert opened == []
-
-
-@pytest.mark.asyncio
-async def test_picker_command_provider_scoped(monkeypatch):
-    """A command that's a picker for pi but NOT for another provider doesn't
-    pop the toolbar on that other provider's window."""
-    from ccslack.handlers import agent_input
-    from ccslack.window_state_store import window_store
-
-    opened = []
-
-    async def _fake_open_toolbar(_client, _channel, wid):
-        opened.append(wid)
-
-    monkeypatch.setattr("ccslack.handlers.toolbar.open_toolbar", _fake_open_toolbar)
-
-    async def _noop_send(*a, **kw):
-        return None
-
-    monkeypatch.setattr(agent_input.tmux_manager, "send_keys", _noop_send)
-    monkeypatch.setattr(
-        agent_input.shell_capture, "is_shell_window", staticmethod(lambda _: False)
-    )
-
-    class _FakeClient:
-        async def chat_postEphemeral(self, **kw):  # noqa: N802
-            return {"ok": True}
-
-    # "personality" is a codex picker command, not a pi one.
-    window_store.get_window_state("@32").provider_name = "pi"
-    await agent_input.deliver_to_agent(_FakeClient(), "C9", "@32", "/personality")
-    assert opened == []
-    window_store.get_window_state("@33").provider_name = "codex"
-    await agent_input.deliver_to_agent(_FakeClient(), "C9", "@33", "/personality")
-    assert opened == ["@33"]
+    assert len(opened) == 4
+    # Leading whitespace still counts.
+    await agent_input.deliver_to_agent(_FakeClient(), "C9", "@31", "  /model")
+    assert len(opened) == 5

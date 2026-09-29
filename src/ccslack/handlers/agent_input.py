@@ -45,27 +45,16 @@ def _is_session_switch_command(text: str) -> bool:
     return first_word in _SESSION_SWITCH_COMMANDS
 
 
-def _is_tui_picker_command(text: str, window_id: str) -> bool:
-    """True when *text* opens an in-TUI picker for this window's provider.
+def _is_tui_picker_command(text: str, _window_id: str = "") -> bool:
+    """True when *text* is an agent CLI command — anything starting with ``/``.
 
-    These commands (e.g. ``/model``, ``/login``, ``/settings``) open a modal
-    in the terminal that must be driven with arrow keys / Enter / Esc — the
-    toolbar is how the user drives it from Slack, so it pops automatically.
+    Any slash command may open a picker / modal / confirm in the TUI that
+    needs arrow keys / Enter / Esc, and we can't predict which ones do — so
+    the toolbar pops for ALL of them. Harmless when the command just prints
+    text (the output auto-forwards anyway); essential when it opens a modal
+    the user must drive from Slack.
     """
-    stripped = text.strip()
-    if not stripped.startswith("/"):
-        return False
-    cmd = stripped.split(None, 1)[0].lstrip("/").lower()
-    if not cmd:
-        return False
-    from ..providers import get_provider_for_window
-    from ..window_state_store import window_store
-
-    state = window_store.window_states.get(window_id)
-    provider = get_provider_for_window(
-        window_id, provider_name=state.provider_name if state else None
-    )
-    return cmd in provider.capabilities.tui_picker_commands
+    return text.lstrip().startswith("/")
 
 
 async def deliver_to_agent(
