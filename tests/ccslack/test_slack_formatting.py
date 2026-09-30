@@ -275,3 +275,39 @@ def test_ordered_offset_from_large_marker():
     blocks, _ = to_blocks("10. ten\n11. eleven")
     el = [b for b in blocks if b["type"] == "rich_text"][0]["elements"][0]
     assert el["offset"] == 9  # "10." → skip 9 numbers
+
+
+def test_approx_tildes_not_paired_into_strike():
+    """~10% ~200pts reads literal — multiple tildes must not strike."""
+    from ccslack.slack_formatting import to_mrkdwn
+
+    out = to_mrkdwn("error dropped ~10% accuracy, ~200pts total")
+    assert "~" not in out  # no tilde left for Slack to pair
+    assert "∼10%" in out and "∼200pts" in out
+
+
+def test_home_dir_tilde_protected():
+    from ccslack.slack_formatting import to_mrkdwn
+
+    out = to_mrkdwn("check ~/.bashrc")
+    assert "∼/" in out
+
+
+def test_intended_strike_survives():
+    from ccslack.slack_formatting import to_mrkdwn
+
+    out = to_mrkdwn("this is ~wrong~ and ~10% approx")
+    assert "~wrong~" in out  # letter-wrapped strike untouched
+    assert "∼10%" in out  # digit-tilde protected
+
+
+def test_tilde_in_list_item_protected():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("- gain of ~10% ~200pts")
+    els = [b for b in blocks if b["type"] == "rich_text"][0]["elements"][0]
+    texts = [e["text"] for e in els["elements"][0]["elements"]]
+    joined = "".join(texts)
+    assert "~" not in joined
+    assert "∼10%" in joined
+    assert not any(e.get("style", {}).get("strike") for e in els["elements"][0]["elements"])

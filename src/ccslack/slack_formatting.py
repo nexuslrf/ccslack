@@ -39,11 +39,26 @@ _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 _HEADER_RE = re.compile(r"^#{1,6}[ \t]+(.+?)\s*$", re.MULTILINE)
 
 
+# A stray ``~`` before a digit (``~10%``, ``~200pts``) or slash (``~/path``)
+# is approximate/home-dir notation, NOT strikethrough — but Slack's mrkdwn
+# pairs tildes into strike anyway. Replace with the look-alike TILDE OPERATOR
+# (U+223C) which renders nearly identically and is not a formatting char.
+_STRAY_TILDE_RE = re.compile(r"(?<!\S)~(?=[\d/])")
+
+
+def protect_stray_tildes(text: str) -> str:
+    """Replace approximate-notation tildes so Slack can't pair them."""
+    return _STRAY_TILDE_RE.sub("\u223c", text)
+
+
 def to_mrkdwn(text: str) -> str:
     """Convert CommonMark-ish markdown to Slack mrkdwn (best-effort).
 
     Order matters: links are converted before any other ``*`` munging.
+    Stray approximate-notation tildes (``~10%``) are swapped to the look-alike
+    ``∼`` first so Slack can't pair multiple tildes into a strikethrough.
     """
+    text = protect_stray_tildes(text)
     text = _LINK_RE.sub(r"<\2|\1>", text)
     # Markdown headers (# … ######) → bold lines; requires whitespace after the
     # hashes so ``#hashtag`` or ``#!`` stay literal. Runs BEFORE the bold
@@ -186,8 +201,9 @@ def _classify_line(line: str) -> tuple[str, str]:
 
 def _inline_md_elements(text: str) -> list[dict[str, Any]]:
     """Convert minimal inline markdown into styled rich_text text elements."""
-    # Flatten **x** → *x* first, mirroring to_mrkdwn.
-    flattened = _BOLD_RE.sub(r"*\1*", text)
+    # Flatten **x** → *x* first, mirroring to_mrkdwn — and protect stray
+    # tildes so ~10% / ~200 in an item can't pair into a strike element.
+    flattened = _BOLD_RE.sub(r"*\1*", protect_stray_tildes(text))
     elements: list[dict[str, Any]] = []
     for token in _INLINE_MD_RE.split(flattened):
         if not token:
