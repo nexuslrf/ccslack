@@ -47,6 +47,22 @@ _vim_locks: dict[str, asyncio.Lock] = {}
 # Delay between sending probe 'i' and recapturing pane (seconds).
 _VIM_PROBE_DELAY = 0.12
 
+# Pre-Enter gap scaling: the TUI needs time to process a pasted message
+# before the submit Enter arrives — the fixed 500ms was tuned for short
+# prompts and swallowed the Enter for long ones. Extra delay = length/800s,
+# capped.
+_ENTER_DELAY_CHARS = 800.0
+_MAX_ENTER_EXTRA_DELAY = 2.5
+
+
+def _send_enter_delay(text: str) -> float:
+    """Seconds to wait after pasting *text* before sending the submit Enter.
+
+    0.5s base + length/800s, capped at +2.5s — long pastes need time to
+    settle in the TUI's composer before Enter can safely submit.
+    """
+    return 0.5 + min(_MAX_ENTER_EXTRA_DELAY, len(text) / _ENTER_DELAY_CHARS)
+
 
 _VIM_INSERT_RE = re.compile(r"^--\s*INSERT\s*--\s*$")
 
@@ -838,7 +854,14 @@ class TmuxManager:
                 self._pane_send, window_id, text, enter=False, literal=True
             ):
                 return False
-        await asyncio.sleep(0.5)
+        # The pre-Enter gap lets the TUI finish processing the pasted text.
+        # A fixed 500ms worked for short prompts, but LONG messages kept the
+        # TUI mid-paste when Enter arrived — the Enter landed as a newline
+        # inside the draft instead of submitting it, leaving the message
+        # sitting unsubmitted in the composer (users had to click Enter via
+        # the toolbar). Scale the gap with the text length (see
+        # _send_enter_delay).
+        await asyncio.sleep(_send_enter_delay(text))
         return await asyncio.to_thread(
             self._pane_send, window_id, "", enter=True, literal=False
         )
