@@ -54,6 +54,21 @@ _VIM_PROBE_DELAY = 0.12
 _ENTER_DELAY_CHARS = 800.0
 _MAX_ENTER_EXTRA_DELAY = 2.5
 
+# Long multi-line pastes can swallow even a delayed Enter (the composer
+# treats it as part of the paste). Extra Enters are a NO-OP on an already-
+# submitted empty composer, so retries are safe: they rescue a swallowed
+# submit and do nothing when the message went through.
+_MULTI_ENTER_THRESHOLD = 1000
+_MULTI_ENTER_ATTEMPTS = 3
+_MULTI_ENTER_GAP = 1.0
+
+
+def _enter_attempts(text: str) -> int:
+    """How many submit Enters to send: 1 normally, 3 for long pastes."""
+    if len(text) > _MULTI_ENTER_THRESHOLD:
+        return _MULTI_ENTER_ATTEMPTS
+    return 1
+
 
 def _send_enter_delay(text: str) -> float:
     """Seconds to wait after pasting *text* before sending the submit Enter.
@@ -854,17 +869,21 @@ class TmuxManager:
                 self._pane_send, window_id, text, enter=False, literal=True
             ):
                 return False
-        # The pre-Enter gap lets the TUI finish processing the pasted text.
-        # A fixed 500ms worked for short prompts, but LONG messages kept the
-        # TUI mid-paste when Enter arrived — the Enter landed as a newline
-        # inside the draft instead of submitting it, leaving the message
-        # sitting unsubmitted in the composer (users had to click Enter via
-        # the toolbar). Scale the gap with the text length (see
-        # _send_enter_delay).
+        # The pre-Enter gap lets the TUI finish processing the pasted text
+        # (scaled with length — see _send_enter_delay), and LONG pastes get
+        # multiple submit Enters: a swallowed first Enter (treated as part
+        # of the paste) is rescued by the retries, while on an already-
+        # submitted composer the extra Enters are a no-op.
         await asyncio.sleep(_send_enter_delay(text))
-        return await asyncio.to_thread(
-            self._pane_send, window_id, "", enter=True, literal=False
-        )
+        attempts = _enter_attempts(text)
+        for attempt in range(attempts):
+            if not await asyncio.to_thread(
+                self._pane_send, window_id, "", enter=True, literal=False
+            ):
+                return False
+            if attempt < attempts - 1:
+                await asyncio.sleep(_MULTI_ENTER_GAP)
+        return True
 
     async def send_keys(
         self,
