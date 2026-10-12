@@ -341,7 +341,8 @@ def _parse_custom_tool_call_output(
     if raw_name and output_text:
         output_text = _format_codex_tool_result(raw_name, output_text)
     if not output_text:
-        output_text = "Done"
+        # Suppressed — see _parse_function_call_output.
+        return [], pending
 
     return (
         [
@@ -415,8 +416,14 @@ def _parse_function_call_output(
         output_text = _format_request_user_input_result(output_text)
     elif raw_name and output_text:
         output_text = _format_codex_tool_result(raw_name, output_text)
+
+    # Empty tool results carry no information (they used to render a bare
+    # "Done" — one per exec call, the recurring channel noise). Suppress
+    # them: the pending entry is already popped above, real outputs still
+    # forward, and exec results never resolve interactive pickers. A literal
+    # "Done" in the command's actual OUTPUT still shows (non-empty text).
     if not output_text:
-        output_text = "Done"
+        return [], pending
 
     return (
         [

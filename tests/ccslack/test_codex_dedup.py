@@ -55,3 +55,94 @@ def test_identical_answer_in_a_new_turn_is_not_dropped():
 
     assert _texts(batch1) == [_ANSWER]
     assert _ANSWER in _texts(batch2)  # legitimately repeated, kept
+
+
+def test_empty_tool_result_suppressed():
+    """Empty exec results must NOT emit a message (the old bare "Done" was the
+    recurring channel noise — one per exec call)."""
+    from ccslack.providers.codex import CodexProvider
+
+    p = CodexProvider()
+    entries = [
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "c1",
+                "arguments": '{"cmd":"ls"}',
+            },
+        },
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "c1",
+                "output": "",  # empty → suppressed
+            },
+        },
+    ]
+    msgs, _ = p.parse_transcript_entries(entries, pending_tools={})
+    # tool_use forwards; the empty result emits nothing (no "Done").
+    assert len(msgs) == 1
+    assert msgs[0].content_type == "tool_use"
+    assert "exec_command" in msgs[0].text
+
+
+def test_nonempty_tool_result_still_forwards():
+    from ccslack.providers.codex import CodexProvider
+
+    p = CodexProvider()
+    entries = [
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "c2",
+                "arguments": '{"cmd":"ls"}',
+            },
+        },
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "c2",
+                "output": "file_a\nfile_b\nfile_c",
+            },
+        },
+    ]
+    msgs, _ = p.parse_transcript_entries(entries, pending_tools={})
+    results = [m for m in msgs if m.content_type == "tool_result"]
+    assert len(results) == 1
+    assert "file_a" in results[0].text
+
+
+def test_literal_done_output_still_forwards():
+    """A command whose REAL output is the word "Done" still forwards — only
+    genuinely empty results are suppressed."""
+    from ccslack.providers.codex import CodexProvider
+
+    p = CodexProvider()
+    entries = [
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "c3",
+                "arguments": '{"cmd":"echo Done"}',
+            },
+        },
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "c3",
+                "output": "Done",
+            },
+        },
+    ]
+    msgs, _ = p.parse_transcript_entries(entries, pending_tools={})
+    results = [m for m in msgs if m.content_type == "tool_result"]
+    assert len(results) == 1
