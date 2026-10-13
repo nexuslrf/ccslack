@@ -311,3 +311,44 @@ def test_tilde_in_list_item_protected():
     assert "~" not in joined
     assert "∼10%" in joined
     assert not any(e.get("style", {}).get("strike") for e in els["elements"][0]["elements"])
+
+
+def test_markdown_link_in_list_becomes_link_element():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("- [Web viewer](http://10.69.159.208:8771/): live.")
+    els = [b for b in blocks if b["type"] == "rich_text"][0]["elements"][0]
+    links = [e for e in els["elements"][0]["elements"] if e["type"] == "link"]
+    assert len(links) == 1
+    assert links[0]["url"] == "http://10.69.159.208:8771/"
+    assert links[0]["text"] == "Web viewer"
+
+
+def test_markdown_link_in_quote_becomes_link_element():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("> see [the doc](https://example.com/doc) here.")
+    quote = [b for b in blocks if b["type"] == "rich_text"][0]["elements"][0]
+    assert quote["type"] == "rich_text_quote"
+    links = [e for e in quote["elements"] if e["type"] == "link"]
+    assert len(links) == 1
+    assert links[0]["url"] == "https://example.com/doc"
+
+
+def test_bold_link_label_flattens_to_style():
+    from ccslack.slack_formatting import to_blocks
+
+    blocks, _ = to_blocks("- [**Bold doc**](https://example.com): label.")
+    els = [b for b in blocks if b["type"] == "rich_text"][0]["elements"][0]
+    links = [e for e in els["elements"][0]["elements"] if e["type"] == "link"]
+    assert len(links) == 1
+    assert links[0]["text"] == "Bold doc"
+    assert links[0]["style"] == {"bold": True}
+
+
+def test_mrkdwn_form_link_in_list_becomes_link_element():
+    """The <url|label> form (post-to_mrkdwn conversion) also resolves."""
+    from ccslack.slack_formatting import _link_element
+
+    el = _link_element("<https://example.com|the docs>")
+    assert el == {"type": "link", "url": "https://example.com", "text": "the docs"}

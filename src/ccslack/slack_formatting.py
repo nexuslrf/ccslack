@@ -140,7 +140,11 @@ def _chunk(text: str, limit: int) -> list[str]:
 _QUOTE_LINE_RE = re.compile(r"^\s*>[ \t]?(.*)$", re.MULTILINE)
 # Inline markdown tokens → styled rich_text elements: *bold*, _italic_,
 # `code`, ~strike~ (after ** flattening).
-_INLINE_MD_RE = re.compile(r"(\*[^*\n]+\*|_[^_\n]+_|`[^`\n]+`|~[^~\n]+~)")
+_INLINE_MD_RE = re.compile(
+    r"(\[[^\]\n]+\]\([^)\s]+\)"      # [label](url)
+    r"|<https?://[^>\s|\n]+\|[^<>\n]+>"  # <url|label> (mrkdwn form)
+    r"|\*[^*\n]+\*|_[^_\n]+_|`[^`\n]+`|~[^~\n]+~)"
+)
 
 
 def _split_segments(text: str) -> list[tuple[str, str]]:
@@ -208,12 +212,55 @@ def _inline_md_elements(text: str) -> list[dict[str, Any]]:
     for token in _INLINE_MD_RE.split(flattened):
         if not token:
             continue
+        link = _link_element(token)
+        if link is not None:
+            elements.append(link)
+            continue
         style_key, body = _token_style(token)
         element: dict[str, Any] = {"type": "text", "text": body}
         if style_key:
             element["style"] = {style_key: True}
         elements.append(element)
     return elements
+
+
+_LINK_TOKEN_MD = re.compile(r"^\[([^\]\n]+)\]\(([^)\s]+)\)$")
+_LINK_TOKEN_MRKDWN = re.compile(r"^<(https?://[^>\s|\n]+)\|([^<>\n]+)>$")
+
+
+def _link_element(token: str) -> dict[str, Any] | None:
+    """Convert one markdown/mrkdwn link token into a rich_text link element.
+
+    Slack's rich_text blocks need ``{"type": "link", ...}`` elements — mrkdwn
+    link syntax inside a text element renders literally. Accepts both the
+    markdown form ``[label](url)`` and the mrkdwn form ``<url|label>``.
+    Returns None for non-link tokens.
+    """
+    m = _LINK_TOKEN_MD.match(token)
+    if m:
+        label, url = m.group(1), m.group(2)
+    else:
+        m = _LINK_TOKEN_MRKDWN.match(token)
+        if not m:
+            return None
+        url, label = m.group(1), m.group(2)
+    # A label carrying its own markdown styling ([**x**](url)) flattens: the
+    # rich_text link element supports a top-level ``style`` field, so strip
+    # the markers and set the style directly — no nested elements (schema-safe).
+    flattened = label.replace("**", "")
+    if _has_inline_marker(flattened):
+        style_key, body = _token_style(flattened)
+    else:
+        style_key, body = "", flattened
+    element: dict[str, Any] = {"type": "link", "url": url, "text": body}
+    if style_key:
+        element["style"] = {style_key: True}
+    return element
+
+
+def _has_inline_marker(label: str) -> bool:
+    """True when the label itself contains markdown styling markers."""
+    return bool(re.search(r"\\*|(?<![\\w/])_|`", label))
 
 
 # Inline-style marker → rich_text style key. A token is styled only when the
