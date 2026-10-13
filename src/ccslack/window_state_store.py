@@ -201,6 +201,9 @@ class WindowState:
     # Last-known status label rendered to the pinned status message
     # (active/idle/done/dead). Persisted so polling can dedup updates.
     status_state: str = "idle"
+    # False = don't echo the user's own prompt back into the channel
+    # (transcript role="user" messages are skipped). Persisted.
+    echo_user_input: bool = True
     # Transient session-switch signal — set when the user sends a
     # session-switching command (/resume, /fork, /clone, /import) from Slack.
     # Stores the session_id we're switching FROM so hookless discovery can
@@ -258,6 +261,8 @@ class WindowState:
             d["status_state"] = self.status_state
         if self.created_at:
             d["created_at"] = self.created_at
+        if self.echo_user_input is False:
+            d["echo_user_input"] = False
         return d
 
     @classmethod
@@ -302,6 +307,7 @@ class WindowState:
             status_message_ts=data.get("status_message_ts", ""),
             status_state=data.get("status_state", "idle"),
             created_at=data.get("created_at", 0.0),
+            echo_user_input=data.get("echo_user_input", True),
         )
 
 

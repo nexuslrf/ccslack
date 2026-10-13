@@ -146,3 +146,57 @@ def test_distinct_long_prompts_echo_in_full():
     long_b = "Draft the Q3 report covering:\n" + "content " * 80
     assert mr._collapse_recurring_user_prompt("s3", long_a) is None
     assert mr._collapse_recurring_user_prompt("s3", long_b) is None
+
+
+@pytest.mark.asyncio
+async def test_echo_off_skips_user_echo_post(monkeypatch):
+    """/ccslack echo off — user prompts reach the agent but no echo posts."""
+    from ccslack.handlers.messaging_pipeline import message_routing as mr
+    from ccslack.session_monitor import NewMessage
+    from ccslack.slack_client import FakeSlackClient
+    from ccslack.window_state_store import window_store
+
+    monkeypatch.setattr(
+        "ccslack.session_query.find_channels_for_session",
+        lambda sid: [("C1", "@1")],
+    )
+
+    posted = []
+
+    class _Client(FakeSlackClient):
+        async def chat_postMessage(self, **kw):  # noqa: N802
+            posted.append(kw)
+            return {"ts": "1"}
+
+    # echo OFF for the window.
+    state = window_store.get_window_state("@1")
+    state.echo_user_input = False
+
+    msg = NewMessage(
+        session_id="s1",
+        text="my prompt",
+        is_complete=True,
+        content_type="text",
+        role="user",
+    )
+    await mr.handle_new_message(msg, _Client())
+    assert posted == []  # no echo
+
+    # echo back ON → the echo posts (exactly one — the visible echo).
+    state.echo_user_input = True
+    await mr.handle_new_message(msg, _Client())
+    echo_posts = [p for p in posted if "my prompt" in (p.get("text") or "")]
+    assert len(echo_posts) == 1
+
+
+def test_echo_state_persists_roundtrip():
+    from ccslack.window_state_store import WindowState
+
+    ws = WindowState()
+    ws.echo_user_input = False
+    d = ws.to_dict()
+    assert d["echo_user_input"] is False
+    restored = WindowState.from_dict(d)
+    assert restored.echo_user_input is False
+    # Default roundtrip: absent field → True.
+    assert WindowState.from_dict({}).echo_user_input is True

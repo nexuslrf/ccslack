@@ -419,6 +419,10 @@ def register(app: AsyncApp) -> None:
             await _handle_rename(client, channel_id, user_id, args)
             return
 
+        if sub == "echo":
+            await _handle_echo_toggle(client, channel_id, user_id, args)
+            return
+
         if sub == "toolcalls":
             await _handle_toolcalls(client, channel_id, user_id, args)
             return
@@ -504,6 +508,9 @@ def _help_text() -> str:
         "(aliases `shot`, `ss`).\n"
         f"• `{slash} toolbar` — typed shortcut for the pinned :control_knobs: "
         "button (aliases `tb`, `tools`).\n"
+        f"• `{slash} echo [on|off]` — toggle echoing your own prompts in this "
+        "channel (off = messages are delivered to the agent without a "
+        "visible echo).\n"
         f"• `{slash} toolcalls [full|calls|hidden|default]` — tool-chain detail: "
         "`full` (call+result), `calls` (call only), `hidden`.\n"
         f"• `{slash} thread [on|off|default]` — group tool chains under a "
@@ -1847,6 +1854,65 @@ def _register_attach_pick_action(app) -> None:  # noqa: ANN001
                 f"`{session_id[:12]}…` (tmux `{window_id}`)."
             ),
         )
+
+
+async def _handle_echo_toggle(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+    args: list[str],
+) -> None:
+    """``/ccslack echo [on|off]`` — toggle echoing the user's own prompts.
+
+    When off, typed messages and @-mentions are NOT re-posted into the
+    channel (the agent still receives them; only the echo is skipped).
+    ``/ccslack run`` echoes and transcript user messages are both covered.
+    """
+    window_id = thread_router.get_window_for_channel(channel_id)
+    if window_id is None:
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text="ccslack: `echo` only works inside a bound session channel.",
+        )
+        return
+
+    state = window_store.window_states.get(window_id)
+    if state is None:
+        return
+
+    if not args:
+        current = "on" if state.echo_user_input else "off"
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=(
+                f"ccslack: user-input echo is *{current}* for this session. "
+                f"Use `{config.slash_command} echo on|off` to change."
+            ),
+        )
+        return
+
+    mode = args[0].lower()
+    if mode not in ("on", "off"):
+        await _post_ephemeral(
+            client.chat_postEphemeral,
+            channel=channel_id,
+            user=user_id,
+            text=f"ccslack: usage `{config.slash_command} echo [on|off]`.",
+        )
+        return
+
+    state.echo_user_input = mode == "on"
+    window_store._schedule_save()
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=f":bust_in_silhouette: User-input echo *{mode}* for this session.",
+    )
 
 
 async def _handle_grant(

@@ -289,6 +289,11 @@ async def _route_to_channel(
         if run_echo.consume_user_echo_suppression(window_id):
             return
 
+        # Per-window echo toggle (/ccslack echo off): skip the user's own
+        # prompt echo entirely. The turn bookkeeping above already ran.
+        if not window_query.get_echo_user_input(window_id):
+            return
+
     # Everything that decides "don't post this normally" (silent mode, the live
     # picker, tool-call visibility, notification modes) lives in one gate so the
     # post path below stays linear.

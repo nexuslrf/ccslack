@@ -75,6 +75,12 @@ def is_commentary_hidden(window_id: str) -> bool:
     return visibility == "hidden"
 
 
+def get_echo_user_input(window_id: str) -> bool:
+    """False = the channel must not echo the user's own prompt messages."""
+    state = window_store.window_states.get(window_id)
+    return state.echo_user_input if state else True
+
+
 def get_batch_mode(window_id: str) -> str:
     """Get batch mode for a window (default: 'batched')."""
     state = window_store.window_states.get(window_id)
