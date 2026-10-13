@@ -420,6 +420,10 @@ def register(app: AsyncApp) -> None:
             await _handle_rename(client, channel_id, user_id, args)
             return
 
+        if sub == "upgrade":
+            await _handle_upgrade(client, channel_id, user_id)
+            return
+
         if sub == "echo":
             await _handle_echo_toggle(client, channel_id, user_id, args)
             return
@@ -486,6 +490,8 @@ def _help_text() -> str:
         f"• `{slash} attach [list]` — bind this channel to a running agent "
         "session: auto-detect, or `list` to pick from recent sessions when "
         "several share the directory.\n"
+        f"• `{slash} upgrade` — git pull + uv sync + restart, local and "
+        "every fleet worker (meta only).\n"
         f"• `{slash} restore [continue|resume|fresh]` — respawn a dead session "
         "(after reboot / tmux restart).\n"
         f"• `{slash} revive <channel> [continue|resume|fresh]` — bring back a "
@@ -1855,6 +1861,166 @@ def _register_attach_pick_action(app) -> None:  # noqa: ANN001
                 f"`{session_id[:12]}…` (tmux `{window_id}`)."
             ),
         )
+
+
+async def _handle_upgrade(
+    client,  # noqa: ANN001
+    channel_id: str,
+    user_id: str,
+) -> None:
+    """``/ccslack upgrade`` — git pull + uv sync in place, then restart.
+
+    Meta-channel only. Upgrades the local install, and when this host runs
+    as a fleet router (CCSLACK_WORKERS configured), best-effort upgrades
+    every configured worker over SSH (same repo path assumed), then
+    restarts each service. Progress is posted as it goes; the final
+    report lands before the local restart bounces the process.
+    """
+    from .auth import is_meta_authorized
+
+    if not is_meta_authorized(user_id):
+        return
+
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=":rocket: ccslack upgrade starting…",
+    )
+
+    results: list[str] = []
+    results.append(await _upgrade_local())
+
+    # Fleet: upgrade every configured worker over SSH (router case).
+    from ..config import config as _cfg
+
+    if _cfg.workers_raw:
+        from ..router_link import parse_workers
+
+        specs = parse_workers(_cfg.workers_raw, _cfg.link_port)
+        for spec in specs:
+            results.append(await _upgrade_worker(spec.host, spec.ssh_target))
+    else:
+        results.append("fleet: no workers configured (local-only install)")
+
+    summary = "\n".join(results)
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=f":rocket: upgrade report:\n{summary}",
+    )
+
+    # Restart LAST so the report lands first. Best-effort chain; the
+    # SIGTERM fallback relies on systemd Restart=on-failure bouncing us.
+    import subprocess
+
+    for cmd in (
+        ["sudo", "-n", "systemctl", "restart", "ccslack"],
+        ["systemctl", "--user", "restart", "ccslack"],
+    ):
+        if subprocess.run(cmd, timeout=30, capture_output=True).returncode == 0:
+            await _post_ephemeral(
+                client.chat_postEphemeral,
+                channel=channel_id,
+                user=user_id,
+                text=":arrows_counterclockwise: ccslack restarting (new code).",
+            )
+            return
+
+    import os
+    import signal
+
+    await _post_ephemeral(
+        client.chat_postEphemeral,
+        channel=channel_id,
+        user=user_id,
+        text=":arrows_counterclockwise: restarting via self-signal.",
+    )
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+def _ccslack_repo_dir() -> Path | None:
+    """Locate the ccslack repo root (contains pyproject.toml + src/ccslack)."""
+    for candidate in (Path.cwd(), *Path(__file__).resolve().parents):
+        if (candidate / "pyproject.toml").is_file() and (
+            candidate / "src" / "ccslack"
+        ).is_dir():
+            return candidate
+    return None
+
+
+async def _upgrade_local() -> str:
+    """git pull --ff-only + uv sync in the local repo. Returns a report line."""
+    import subprocess
+
+    repo = _ccslack_repo_dir()
+    if repo is None:
+        return ":x: local: repo dir not found"
+
+    def _run(*args: str) -> tuple[int, str]:
+        proc = subprocess.run(
+            args, cwd=repo, capture_output=True, text=True, timeout=300
+        )
+        return proc.returncode, (proc.stdout + proc.stderr).strip()[-400:]
+
+    code, before = _run("git", "log", "-1", "--oneline")
+    if code != 0:
+        return f":x: local: git not available ({before})"
+
+    code, pull = _run("git", "pull", "--ff-only")
+    if code != 0:
+        return f":x: local: `git pull --ff-only` failed — resolve manually\n```{pull}```"
+
+    code, after = _run("git", "log", "-1", "--oneline")
+    code, sync = _run("uv", "sync", "--extra", "dev")
+    if code != 0:
+        return f":x: local: `uv sync` failed\n```{sync}```"
+
+    from ..config import config as _cfg
+
+    return (
+        f":white_check_mark: local `{_cfg.host_name}`: "
+        f"{before.strip()} → {after.strip()}"
+    )
+
+
+async def _upgrade_worker(host: str, ssh_target: str) -> str:
+    """Best-effort upgrade of a fleet worker over plain SSH. Report line."""
+    import subprocess
+
+    repo = _ccslack_repo_dir()
+    remote_dir = str(repo) if repo else "~/ccslack"
+    remote = f"cd {remote_dir} && git pull --ff-only && uv sync --extra dev"
+    try:
+        proc = subprocess.run(
+            [
+                "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                ssh_target, remote,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f":x: {host}: ssh failed ({exc})"
+    if proc.returncode != 0:
+        out = (proc.stdout + proc.stderr).strip()[-300:]
+        return f":x: {host}: upgrade failed\n```{out}```"
+
+    # Best-effort remote restart (never fatal).
+    subprocess.run(
+        [
+            "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+            ssh_target,
+            "sudo -n systemctl restart ccslack 2>/dev/null"
+            " || systemctl --user restart ccslack",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return f":white_check_mark: {host}: pulled + synced (restart attempted)"
 
 
 async def _handle_echo_toggle(

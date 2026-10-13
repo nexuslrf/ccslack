@@ -47,3 +47,23 @@ async def test_kill_all_accepted_from_dm_in_hybrid_mode(monkeypatch):
 
     text = client.last_call("chat_postEphemeral").kwargs["text"]
     assert "kill --all --confirm" in text
+
+
+def test_repo_dir_detection():
+    from ccslack.handlers.meta import _ccslack_repo_dir
+
+    repo = _ccslack_repo_dir()
+    assert repo is not None
+    assert (repo / "pyproject.toml").is_file()
+    assert (repo / "src" / "ccslack").is_dir()
+
+
+def test_workers_parsed_from_config(monkeypatch):
+    """The fleet branch parses CCSLACK_WORKERS via the shared router_link parser."""
+    from ccslack.router_link import parse_workers
+
+    specs = parse_workers("gpu1=gpu1.nvidia.com,gpu2=ruofanl@gpu2", 8765)
+    assert [(s.host, s.ssh_target) for s in specs] == [
+        ("gpu1", "gpu1.nvidia.com"),
+        ("gpu2", "ruofanl@gpu2"),
+    ]
