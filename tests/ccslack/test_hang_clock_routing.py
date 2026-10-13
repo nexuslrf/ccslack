@@ -107,3 +107,42 @@ async def test_short_thinking_still_routed_to_clock(monkeypatch):
     )
     await mr.handle_new_message(msg, FakeSlackClient())
     assert "@1" in calls  # clock reset even though the snippet was not posted
+
+
+def test_recurring_user_prompt_collapses_after_first(monkeypatch):
+    """A scheduled prompt (same first line, timestamp inside) echoes in full
+    once, then collapses to a one-liner for each later firing."""
+    from ccslack.handlers.messaging_pipeline import message_routing as mr
+
+    mr._SEEN_USER_PROMPTS.clear()
+
+    prompt_a = "Recurring R2-B progress report. Standby:\n" + "detail " * 60
+    prompt_a2 = "Recurring R2-B progress report. Standby:\n" + "detail " * 61
+
+    first = mr._collapse_recurring_user_prompt("s1", prompt_a)
+    assert first is None  # first occurrence echoes in full
+
+    second = mr._collapse_recurring_user_prompt("s1", prompt_a2)
+    assert second is not None and "occurrence #2" in second
+
+    third = mr._collapse_recurring_user_prompt("s1", prompt_a)
+    assert third is not None and "occurrence #3" in third
+
+
+def test_short_repeats_never_collapsed():
+    from ccslack.handlers.messaging_pipeline import message_routing as mr
+
+    mr._SEEN_USER_PROMPTS.clear()
+    for _ in range(5):
+        assert mr._collapse_recurring_user_prompt("s2", "y") is None
+        assert mr._collapse_recurring_user_prompt("s2", "continue") is None
+
+
+def test_distinct_long_prompts_echo_in_full():
+    from ccslack.handlers.messaging_pipeline import message_routing as mr
+
+    mr._SEEN_USER_PROMPTS.clear()
+    long_a = "Analyze the failing test suite and:\n" + "steps " * 80
+    long_b = "Draft the Q3 report covering:\n" + "content " * 80
+    assert mr._collapse_recurring_user_prompt("s3", long_a) is None
+    assert mr._collapse_recurring_user_prompt("s3", long_b) is None

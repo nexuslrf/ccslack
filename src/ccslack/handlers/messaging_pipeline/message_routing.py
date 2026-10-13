@@ -27,6 +27,41 @@ _USER_ECHO_PREFIX = ":bust_in_silhouette: "
 # ccgram caps user-message echoes at 3000 chars to keep the channel tidy.
 _MAX_USER_ECHO_LEN = 3000
 
+# Long user prompts whose FIRST LINE matches an earlier echo are scheduled/
+# recurring task injections (e.g. a crontab monitor firing the same progress
+# prompt every few hours — a timestamp inside makes each firing differ by a
+# byte or two, but the opening line is stable). The first occurrence echoes
+# in full; later ones collapse to a one-liner. Short messages (human repeats
+# like "y" / "continue") are never touched.
+_USER_COLLAPSE_MIN_CHARS = 200
+_USER_FIRSTLINE_KEY_CHARS = 100
+_USER_PROMPT_MEMORY = 32
+_USER_SESSIONS_MEMORY = 64
+_SEEN_USER_PROMPTS: dict[str, dict[str, int]] = {}
+
+
+def _collapse_recurring_user_prompt(session_id: str, text: str) -> str | None:
+    """Return a collapsed echo for a repeated long user prompt, or None.
+
+    None = echo in full (first occurrence, short message, or new first line).
+    """
+    if len(text) < _USER_COLLAPSE_MIN_CHARS:
+        return None
+    first_line = text.strip().split("\n", 1)[0]
+    key = first_line[:_USER_FIRSTLINE_KEY_CHARS]
+    counts = _SEEN_USER_PROMPTS.setdefault(session_id, {})
+    counts[key] = counts.get(key, 0) + 1
+    if len(counts) > _USER_PROMPT_MEMORY:
+        counts.pop(next(iter(counts)))
+    if len(_SEEN_USER_PROMPTS) > _USER_SESSIONS_MEMORY:
+        _SEEN_USER_PROMPTS.pop(next(iter(_SEEN_USER_PROMPTS)))
+    if counts[key] == 1:
+        return None
+    return (
+        f":repeat: _Recurring prompt — occurrence #{counts[key]}; the full "
+        "text is identical to the earlier echo above._"
+    )
+
 # Per-session tool_use_id → (channel_id, slack_ts, decorated_tool_use_text).
 # Populated when we post a ``tool_use`` message; consumed when the matching
 # ``tool_result`` arrives. We rewrite the original message in place by
@@ -107,12 +142,20 @@ async def handle_new_message(msg: NewMessage, client: SlackClient) -> None:
     if msg.content_type == "thinking" and len(text.strip()) < _MIN_THINKING_LENGTH:
         return
 
+    # Recurring/scheduled task prompts (same first line each firing) collapse
+    # to a one-liner after the first full echo.
+    display_text = text
+    if msg.role == "user":
+        collapsed = _collapse_recurring_user_prompt(msg.session_id, text)
+        if collapsed is not None:
+            display_text = collapsed
+
     for channel_id, window_id in channels:
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(
             window_id=window_id, channel_id=channel_id, session_id=msg.session_id
         )
-        await _route_to_channel(client, channel_id, window_id, msg, text)
+        await _route_to_channel(client, channel_id, window_id, msg, display_text)
 
 
 async def _pre_post_suppressed(
