@@ -248,6 +248,7 @@ def register(app: AsyncApp) -> None:
             "thread",
             "relaunch",
             "attach",
+            "echo",
             "manual",
             "run",
             "commentary",
